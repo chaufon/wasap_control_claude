@@ -13,6 +13,7 @@ from .config import load_config
 from .dispatcher import Dispatcher
 from .redis_client import RedisBus
 from .transcription import Transcriber
+from .tts import Synthesizer
 
 LOG_DIR = Path.home() / ".local" / "share" / "claude-orchestrator" / "logs"
 
@@ -42,7 +43,8 @@ async def _main() -> None:
     bus = RedisBus(config.redis)
     runner = ClaudeCodeRunner(binary=config.claude_code.binary)
     transcriber = Transcriber(config.whisper)
-    dispatcher = Dispatcher(config, bus, runner, transcriber)
+    synthesizer = Synthesizer(config.tts, config.bridge.outgoing_staging_dir)
+    dispatcher = Dispatcher(config, bus, runner, transcriber, synthesizer)
 
     logger.info(
         "claude-orchestrator started; projects=%s default=%s",

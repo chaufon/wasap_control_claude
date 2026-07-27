@@ -19,6 +19,8 @@ from collections.abc import AsyncIterator, Awaitable, Callable
 from dataclasses import dataclass
 from pathlib import Path
 
+from .outbox import OUTBOX_SYSTEM_PROMPT
+
 
 @dataclass
 class ClaudeCodeResult:
@@ -83,6 +85,8 @@ class ClaudeCodeRunner:
             "stream-json",
             "--verbose",
             "--dangerously-skip-permissions",
+            "--append-system-prompt",
+            OUTBOX_SYSTEM_PROMPT,
         ]
         if resume_session_id:
             args += ["--resume", resume_session_id]
@@ -90,6 +94,11 @@ class ClaudeCodeRunner:
         process = await asyncio.create_subprocess_exec(
             *args,
             cwd=str(cwd),
+            # asyncio's default readline() buffer is 64KiB, which a single
+            # stream-json event can exceed once file content (e.g. a read
+            # PDF/document) ends up embedded in a tool-result line — raise it
+            # generously rather than truncating/crashing mid-task.
+            limit=32 * 1024 * 1024,
             stdout=asyncio.subprocess.PIPE,
             stderr=asyncio.subprocess.PIPE,
         )

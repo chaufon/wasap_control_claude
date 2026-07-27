@@ -19,6 +19,7 @@ from .commands import HELP_TEXT, Command, parse_command
 from .config import Config, ProjectConfig
 from .formatting import format_response
 from .models import IncomingMessage, OutgoingMessage
+from .outbox import MAX_FILE_SIZE_BYTES, collect_outgoing_files, content_hash8
 from .redis_client import RedisBus
 from .state import (
     DynamicProjectEntry,
@@ -29,6 +30,7 @@ from .state import (
     save_state,
 )
 from .transcription import Transcriber
+from .tts import Synthesizer
 
 logger = logging.getLogger(__name__)
 
@@ -36,6 +38,23 @@ logger = logging.getLogger(__name__)
 # entire class of path-traversal bugs structurally impossible rather than
 # relying on careful normalization.
 _VALID_PROJECT_NAME_RE = re.compile(r"^[A-Za-z0-9_-]{1,100}$")
+
+# Anything starting with "/" is unambiguously an attempted command, never a
+# personal note, so it gets an explicit notice while disabled — unlike plain
+# text/voice/attachments, which stay silent (SPEC.md §7.1/§7.3).
+_DISABLED_NOTICE = "🔴 Claude Code is disabled. Send /enable first."
+
+
+def _stage_into_inbox(source: Path, project_path: Path, timestamp: str) -> Path:
+    """Move `source` into <project_path>/whatsapp-inbox/, content-hash-suffixed
+    so a same-named file staged at a different time never silently overwrites
+    an earlier one (SPEC.md §5.9's outbox naming applies the same idea).
+    Shared by a message's own attachment and any quoted attachment (§5.9)."""
+    inbox = project_path / "whatsapp-inbox"
+    inbox.mkdir(exist_ok=True)
+    dest = inbox / f"{timestamp}-{source.stem}_{content_hash8(source)}{source.suffix}"
+    shutil.move(str(source), str(dest))
+    return dest.relative_to(project_path)
 
 
 @dataclass
@@ -98,11 +117,13 @@ class Dispatcher:
         bus: RedisBus,
         runner: ClaudeCodeRunner,
         transcriber: Transcriber,
+        synthesizer: Synthesizer,
     ) -> None:
         self._config = config
         self._bus = bus
         self._runner = runner
         self._transcriber = transcriber
+        self._synthesizer = synthesizer
         self._projects: dict[str, ProjectState] = {
             p.name: ProjectState(config=p) for p in config.projects
         }
@@ -161,7 +182,8 @@ class Dispatcher:
                 return
             if not self._toggle.claude_enabled:
                 return  # personal note/backup content: leave it alone (SPEC.md addendum)
-            await self._handle_prompt(text, message)
+            prefix = await self._build_reply_context(message)
+            await self._handle_prompt(prefix + text, message)
             return
 
         if message.type == "voice":
@@ -175,7 +197,8 @@ class Dispatcher:
                 await self._reply("❌ Could not transcribe that voice note.", message)
                 return
             await self._reply(f"🎙️ Heard: “{transcript}”", message)
-            await self._handle_prompt(transcript, message)
+            prefix = await self._build_reply_context(message)
+            await self._handle_prompt(prefix + transcript, message)
             return
 
         if message.type == "attachment":
@@ -185,7 +208,8 @@ class Dispatcher:
                 await self._reply("❌ Attachment message had no file.", message)
                 return
             prompt_text = await self._stage_attachment(message)
-            await self._handle_prompt(prompt_text, message)
+            prefix = await self._build_reply_context(message)
+            await self._handle_prompt(prefix + prompt_text, message)
             return
 
     async def _handle_command(self, command: Command, message: IncomingMessage) -> None:
@@ -244,12 +268,24 @@ class Dispatcher:
             )
             return
 
+        if command.name == "voice":
+            if command.arg not in ("on", "off"):
+                await self._reply("Usage: /voice on | off", message)
+                return
+            self._toggle.voice_enabled = command.arg == "on"
+            save_state(self._toggle)
+            label = "🔊 on" if self._toggle.voice_enabled else "🔇 off"
+            await self._reply(f"Voice replies: {label}", message)
+            return
+
         if command.name == "status":
             state = self._projects[self._active_project]
             toggle_label = "🟢 enabled" if self._toggle.claude_enabled else "🔴 disabled"
+            voice_label = "🔊 on" if self._toggle.voice_enabled else "🔇 off"
             busy_label = "busy" if state.invocation is not None else "idle"
             await self._reply(
-                f"{toggle_label}\nproject: {self._active_project} ({busy_label})",
+                f"{toggle_label}\nvoice replies: {voice_label}\n"
+                f"project: {self._active_project} ({busy_label})",
                 message,
             )
             return
@@ -264,11 +300,17 @@ class Dispatcher:
             # above. Content bound for Claude, so it honors the toggle like any
             # other prompt — unlike the meta-commands above (SPEC.md §7.3).
             if not self._toggle.claude_enabled:
+                await self._reply(_DISABLED_NOTICE, message)
                 return
             if not command.arg:
                 await self._reply("Usage: /c <text>", message)
                 return
-            await self._handle_prompt(command.arg, message)
+            prefix = await self._build_reply_context(message)
+            await self._handle_prompt(prefix + command.arg, message)
+            return
+
+        if not self._toggle.claude_enabled:
+            await self._reply(_DISABLED_NOTICE, message)
             return
 
         await self._reply(f"❌ Unknown command '/{command.name}'. Send /help for the list.", message)
@@ -372,18 +414,78 @@ class Dispatcher:
         for chunk in format_response(result.text):
             await self._reply(chunk, message)
 
+        if self._toggle.voice_enabled and result.text.strip():
+            await self._reply_voice(result.text, message)
+
+        await self._send_outbox_files(state.config.path, message)
+
+    async def _reply_voice(self, text: str, message: IncomingMessage) -> None:
+        try:
+            audio_path = await self._synthesizer.synthesize_async(text)
+        except Exception:
+            logger.exception("voice synthesis failed for message %s", message.message_id)
+            return  # text reply already sent; voice is a best-effort extra (SPEC.md §7.4)
+        await self._bus.publish_outgoing(
+            OutgoingMessage(
+                in_reply_to=message.message_id,
+                media_path=str(audio_path),
+                media_mime_type="audio/ogg; codecs=opus",
+            )
+        )
+
+    async def _send_outbox_files(self, project_path: Path, message: IncomingMessage) -> None:
+        result = await asyncio.to_thread(collect_outgoing_files, project_path)
+
+        for path, size in result.oversized:
+            size_mb = size / (1024 * 1024)
+            cap_mb = MAX_FILE_SIZE_BYTES // (1024 * 1024)
+            await self._reply(
+                f"❌ {path.name} is {size_mb:.0f}MB, over the {cap_mb}MB limit — "
+                "left in whatsapp-outbox/, not sent.",
+                message,
+            )
+
+        for outbox_file in result.sent:
+            await self._bus.publish_outgoing(
+                OutgoingMessage(
+                    in_reply_to=message.message_id,
+                    media_path=str(outbox_file.path),
+                    media_mime_type=outbox_file.mime_type,
+                    media_filename=outbox_file.path.name,
+                    caption=outbox_file.path.name,
+                    delete_after_send=False,
+                )
+            )
+
     async def _stage_attachment(self, message: IncomingMessage) -> str:
         state = self._projects[self._active_project]
         assert message.media_path is not None
-        source = Path(message.media_path)
-        inbox = state.config.path / "whatsapp-inbox"
-        inbox.mkdir(exist_ok=True)
         timestamp = datetime.now(timezone.utc).strftime("%Y-%m-%dT%H-%M-%S")
-        dest = inbox / f"{timestamp}-{source.name}"
-        await asyncio.to_thread(shutil.move, str(source), str(dest))
-        relative = dest.relative_to(state.config.path)
+        relative = await asyncio.to_thread(
+            _stage_into_inbox, Path(message.media_path), state.config.path, timestamp
+        )
         caption = f'User said: "{message.text}" — ' if message.text else ""
         return f"{caption}attached file: {relative}"
+
+    async def _build_reply_context(self, message: IncomingMessage) -> str:
+        """Prefix for messages that quote/reply to an earlier one (SPEC.md
+        §5.9/§7.6) — applies regardless of this message's own type, since a
+        reply can itself be text, voice, or an attachment."""
+        if message.quoted_media_path:
+            try:
+                state = self._projects[self._active_project]
+                timestamp = datetime.now(timezone.utc).strftime("%Y-%m-%dT%H-%M-%S")
+                relative = await asyncio.to_thread(
+                    _stage_into_inbox, Path(message.quoted_media_path), state.config.path, timestamp
+                )
+                return f"Replying to attached file: {relative}\n\n"
+            except OSError:
+                logger.exception("failed to stage quoted media %s", message.quoted_media_path)
+        if message.quoted_text:
+            return f'Replying to: "{message.quoted_text}"\n\n'
+        if message.quoted_media_type_label:
+            return f"(Replying to a {message.quoted_media_type_label} that couldn't be retrieved)\n\n"
+        return ""
 
     async def _reply(self, text: str, message: IncomingMessage) -> None:
         await self._bus.publish_outgoing(

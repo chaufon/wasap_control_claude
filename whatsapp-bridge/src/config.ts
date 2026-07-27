@@ -14,6 +14,7 @@ export interface BridgeConfig {
   outgoingChannel: string;
   authDir: string;
   stagingDir: string;
+  outgoingStagingDir: string;
 }
 
 const DEFAULT_CONFIG_PATH =
@@ -54,6 +55,9 @@ export function loadConfig(configPath: string = DEFAULT_CONFIG_PATH): BridgeConf
     ),
     stagingDir: expandHome(
       bridge.staging_dir ?? path.join(os.tmpdir(), 'whatsapp-bridge', 'incoming'),
+    ),
+    outgoingStagingDir: expandHome(
+      bridge.outgoing_staging_dir ?? path.join(os.tmpdir(), 'whatsapp-bridge', 'outgoing'),
     ),
   };
 }

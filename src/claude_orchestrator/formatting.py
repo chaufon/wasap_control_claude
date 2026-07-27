@@ -123,3 +123,25 @@ def split_message(text: str, max_length: int = MAX_MESSAGE_LENGTH) -> list[str]:
 
 def format_response(text: str, max_length: int = MAX_MESSAGE_LENGTH) -> list[str]:
     return split_message(markdown_to_whatsapp(text), max_length=max_length)
+
+
+_CODE_BLOCK_PLACEHOLDER = " (code block omitted) "
+
+
+def strip_for_speech(text: str) -> str:
+    """Reduce Markdown to plain prose for TTS (SPEC.md §7.4) — the text
+    channel keeps full Markdown via format_response above; this is only for
+    what gets spoken. Code isn't meaningful read aloud, so fenced/inline
+    code is dropped rather than transliterated."""
+    working = _FENCE_RE.sub(_CODE_BLOCK_PLACEHOLDER, text)
+    working = _TABLE_SEPARATOR_RE.sub("", working)
+    working = _TABLE_ROW_RE.sub(lambda m: _flatten_table_row(m).replace(" | ", ", "), working)
+    working = _LINK_RE.sub(lambda m: m.group(1), working)
+    working = _STRIKE_RE.sub(lambda m: m.group(1), working)
+    working = _EMPHASIS_RE.sub(
+        lambda m: m.group("bold") or m.group("italic_u") or m.group("italic_a"), working
+    )
+    working = _HEADER_RE.sub(lambda m: m.group(2).strip(), working)
+    working = _INLINE_CODE_RE.sub(lambda m: m.group(1), working)
+    working = _BULLET_RE.sub("", working)
+    return re.sub(r"\n{2,}", "\n", working).strip()

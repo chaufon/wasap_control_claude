@@ -39,6 +39,21 @@ whisper:
   fallback_device: cpu
   fallback_model: medium
 
+# Voice replies via /voice on (SPEC.md §7.4), off by default. Piper voice
+# models download automatically on first use (like whisper's above) into
+# tts.models_dir. langdetect picks which of these voices to use per reply,
+# based on the reply's own language — not the input message's language, and
+# not a static config default. Any detected language without an entry here
+# falls back to "en".
+tts:
+  voices:
+    en: en_US-ljspeech-high
+    es: es_AR-daniela-high
+  # CPU is intentional: Piper is fast enough without a GPU, and this avoids
+  # VRAM contention with whisper.device: cuda above on a single GPU.
+  device: cpu
+  models_dir: "~/.local/share/claude-orchestrator/piper-voices"
+
 redis:
   host: 127.0.0.1
   port: 6379
@@ -48,7 +63,10 @@ redis:
 progress_updates:
   interval_seconds: 10
 
-# Node bridge only.
 bridge:
+  # Node bridge only.
   auth_dir: "~/.local/share/whatsapp-bridge/auth"
   staging_dir: "/tmp/whatsapp-bridge/incoming"
+  # Shared: the Python orchestrator writes synthesized voice-reply audio
+  # here; the Node bridge reads it, sends it, and deletes it (SPEC.md §7.4).
+  outgoing_staging_dir: "/tmp/whatsapp-bridge/outgoing"

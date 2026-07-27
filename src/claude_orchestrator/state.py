@@ -22,6 +22,9 @@ STATE_PATH = Path.home() / ".local" / "share" / "claude-orchestrator" / "state.j
 @dataclass
 class ToggleState:
     claude_enabled: bool = True
+    # Opt-in (SPEC.md §7.4): voice replies are extra synthesis work per
+    # message, so unlike claude_enabled this defaults to off.
+    voice_enabled: bool = False
 
 
 def load_state(path: Path = STATE_PATH) -> ToggleState:
@@ -29,7 +32,10 @@ def load_state(path: Path = STATE_PATH) -> ToggleState:
         return ToggleState()
     try:
         data = json.loads(path.read_text(encoding="utf-8"))
-        return ToggleState(claude_enabled=bool(data.get("claude_enabled", True)))
+        return ToggleState(
+            claude_enabled=bool(data.get("claude_enabled", True)),
+            voice_enabled=bool(data.get("voice_enabled", False)),
+        )
     except (json.JSONDecodeError, OSError):
         logger.exception("failed to read state file %s; defaulting to enabled", path)
         return ToggleState()

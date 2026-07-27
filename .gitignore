@@ -29,3 +29,9 @@ dump.rdb
 .vscode/
 .idea/
 .DS_Store
+whatsapp-outbox/
+whatsapp-inbox/
+
+# Scratch folder for sharing debugging screenshots mid-conversation, not
+# project documentation.
+design/

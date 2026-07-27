@@ -55,13 +55,43 @@ class ProgressUpdatesConfig:
 
 
 @dataclass(frozen=True)
+class TTSConfig:
+    # Maps a langdetect language code to a Piper voice id (SPEC.md §7.4).
+    # Any detected language without an entry here falls back to "en".
+    voices: dict[str, str] = field(
+        default_factory=lambda: {"en": "en_US-ljspeech-high", "es": "es_AR-daniela-high"}
+    )
+    # CPU is the intended default: Piper is fast enough without a GPU, and
+    # this avoids VRAM contention with faster-whisper's large-v3 model on
+    # this machine's 6 GB laptop GPU.
+    device: str = "cpu"
+    models_dir: Path = field(
+        default_factory=lambda: Path.home()
+        / ".local"
+        / "share"
+        / "claude-orchestrator"
+        / "piper-voices"
+    )
+
+
+@dataclass(frozen=True)
+class BridgeConfig:
+    """Only the one field the orchestrator itself needs from the `bridge:`
+    section — the rest of that section is Node-bridge-only (SPEC.md §8)."""
+
+    outgoing_staging_dir: Path = Path("/tmp/whatsapp-bridge/outgoing")
+
+
+@dataclass(frozen=True)
 class Config:
     whatsapp: WhatsAppConfig
     projects: list[ProjectConfig] = field(default_factory=list)
     claude_code: ClaudeCodeConfig = field(default_factory=ClaudeCodeConfig)
     whisper: WhisperConfig = field(default_factory=WhisperConfig)
+    tts: TTSConfig = field(default_factory=TTSConfig)
     redis: RedisConfig = field(default_factory=RedisConfig)
     progress_updates: ProgressUpdatesConfig = field(default_factory=ProgressUpdatesConfig)
+    bridge: BridgeConfig = field(default_factory=BridgeConfig)
     # Parent directory /create is allowed to make new project folders under
     # (SPEC.md §7.2). None means /create is not configured/available.
     project_root: Path | None = None
@@ -106,8 +136,10 @@ def load_config(path: Path | None = None) -> Config:
 
     claude_code_raw = raw.get("claude_code") or {}
     whisper_raw = raw.get("whisper") or {}
+    tts_raw = raw.get("tts") or {}
     redis_raw = raw.get("redis") or {}
     progress_raw = raw.get("progress_updates") or {}
+    bridge_raw = raw.get("bridge") or {}
     project_root_raw = raw.get("project_root")
     project_root = Path(project_root_raw).expanduser() if project_root_raw else None
 
@@ -124,12 +156,29 @@ def load_config(path: Path | None = None) -> Config:
             fallback_device=whisper_raw.get("fallback_device", "cpu"),
             fallback_model=whisper_raw.get("fallback_model", "medium"),
         ),
+        tts=TTSConfig(
+            voices=tts_raw.get(
+                "voices", {"en": "en_US-ljspeech-high", "es": "es_AR-daniela-high"}
+            ),
+            device=tts_raw.get("device", "cpu"),
+            models_dir=Path(
+                tts_raw.get(
+                    "models_dir",
+                    Path.home() / ".local" / "share" / "claude-orchestrator" / "piper-voices",
+                )
+            ).expanduser(),
+        ),
         redis=RedisConfig(
             host=redis_raw.get("host", "127.0.0.1"),
             port=int(redis_raw.get("port", 6379)),
         ),
         progress_updates=ProgressUpdatesConfig(
             interval_seconds=int(progress_raw.get("interval_seconds", 10)),
+        ),
+        bridge=BridgeConfig(
+            outgoing_staging_dir=Path(
+                bridge_raw.get("outgoing_staging_dir", "/tmp/whatsapp-bridge/outgoing")
+            ).expanduser(),
         ),
         project_root=project_root,
     )

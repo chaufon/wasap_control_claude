@@ -16,6 +16,10 @@ sudo apt install -y redis-server ffmpeg nodejs npm
   `faster-whisper`. `faster-whisper`/`ctranslate2` are pulled in by `uv sync`
   below; if CUDA libraries aren't importable at runtime the transcriber
   automatically falls back to CPU (SPEC.md §4.3).
+- `ffmpeg` (already listed above) is also used to convert synthesized voice
+  replies to the Opus/OGG format WhatsApp voice notes require (SPEC.md §7.4).
+  `piper-tts` and `langdetect` are pulled in by `uv sync` below; voice models
+  themselves download automatically on first `/voice on` use.
 - A logged-in Claude Code CLI session on this machine (`claude login`) under
   the Pro subscription — the orchestrator shells out to `claude`, it never
   uses an API key.
@@ -59,6 +63,12 @@ Edit `~/.config/claude-orchestrator/config.yaml`:
 - `project_root` — optional. Parent directory `/create <name>` is allowed
   to make new project folders under (SPEC.md §7.2). Leave unset to disable
   `/create` entirely.
+- `tts.voices` — maps a detected reply language to a Piper voice id
+  (defaults: `en_US-ljspeech-high`, `es_AR-daniela-high`). Only used once you
+  send `/voice on` (SPEC.md §7.4); any other detected language falls back to
+  `en`.
+- No config needed for Claude Code sending files back — see "Using it"
+  below and SPEC.md §7.5.
 
 ## Pair with WhatsApp
 
@@ -130,16 +140,44 @@ In your "Message Yourself" WhatsApp chat:
 - `/enable` / `/disable` — allow/stop messages from reaching Claude Code.
 - `/status` — enabled/disabled state, active project, busy/idle.
 - `/c <text>` — send `<text>` to Claude Code verbatim as the prompt, e.g.
-  `/c /usage` or `/c /grill-me an idea` — use this to reach Claude Code's own
-  commands/skills, which would otherwise be swallowed as an unrecognized
-  command above. Gated by `/enable`/`/disable` like plain text (SPEC.md §7.3).
+  `/c /usage` or `/c /mattpocock-skills:grill-me an idea` — use this to reach
+  Claude Code's own commands/skills, which would otherwise be swallowed as an
+  unrecognized command above. Plugin skills need the fully-qualified
+  `plugin:skill` name (`/mattpocock-skills:grill-me`, not just `/grill-me`) —
+  Claude Code CLI itself replies "Unknown command" otherwise, same as it
+  would interactively; this isn't something `/c` can work around. While
+  disabled, `/c` (and any other unrecognized `/command`) replies "Claude Code
+  is disabled" instead of running — a leading `/` is never a personal note,
+  so unlike plain text it's never silently ignored (SPEC.md §7.1/§7.3).
+- `/voice on` / `/voice off` — also send each reply as a WhatsApp voice note,
+  in addition to the text reply (off by default). The voice note's language
+  (English/Spanish, per `tts.voices` above) is detected from the reply's own
+  text each time, not fixed to one language or based on how you asked
+  (SPEC.md §7.4).
 - `/help` — show the command list.
+- Claude Code can also send **you** a file (e.g. a generated PDF report):
+  it just needs to save it into `<project>/whatsapp-outbox/` — it's told
+  about this convention automatically on every invocation, so you can simply
+  ask it to "send me the report" and it'll know where to put it. Anything
+  placed there is delivered right after the reply, then archived into
+  `whatsapp-outbox/sent/` so it's never resent. Files over 64MB get a clear
+  error instead of being sent. If the project is a git repo, `whatsapp-outbox/`
+  is added to its `.gitignore` automatically the first time it's used
+  (SPEC.md §7.5).
+- WhatsApp's own **reply** (quote) feature works too: replying to an earlier
+  message — text, an attachment, or a voice note, in either direction — adds
+  that quoted content as context ahead of your new message, e.g. replying
+  "make this black and white" to a photo re-downloads that photo into
+  `whatsapp-inbox/` and tells Claude Code about it, and replying to text
+  quotes it verbatim. Files saved into `whatsapp-inbox/`/`whatsapp-outbox/sent/`
+  get a short content-hash suffix (e.g. `report_a3f9c2d1.pdf`) so two
+  different files with the same name never collide (SPEC.md §5.9/§7.6).
 
 ## Repository layout
 
 ```
 SPEC.md                    full technical specification
-src/claude_orchestrator/   Python orchestrator (dispatcher, Claude Code CLI wrapper, transcription, formatting, enable/disable state)
+src/claude_orchestrator/   Python orchestrator (dispatcher, Claude Code CLI wrapper, transcription, TTS, outgoing files, formatting, enable/disable state)
 whatsapp-bridge/           Node.js/TypeScript Baileys <-> Redis bridge
 config/config.example.yaml config template (copy to ~/.config/claude-orchestrator/config.yaml)
 systemd/                   systemd --user unit files

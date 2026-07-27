@@ -16,6 +16,8 @@ HELP_TEXT = (
     "/status — show enabled/disabled state, active project, and busy/idle\n"
     "/c <text> — send <text> to Claude Code verbatim, e.g. \"/c /usage\" or "
     "\"/c /grill-me an idea\" (bypasses the commands above)\n"
+    "/voice on | off — also send replies as a voice note, in the reply's own "
+    "detected language (off by default)\n"
     "/help — show this message\n"
     "Anything else is sent to Claude Code as a prompt, unless disabled."
 )

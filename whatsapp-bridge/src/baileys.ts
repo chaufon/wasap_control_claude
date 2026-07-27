@@ -5,7 +5,7 @@
 // before anything reaches the orchestrator.
 
 import { randomUUID } from 'node:crypto';
-import { mkdir, writeFile } from 'node:fs/promises';
+import { mkdir, readFile, unlink, writeFile } from 'node:fs/promises';
 import path from 'node:path';
 import { Boom } from '@hapi/boom';
 import makeWASocket, {
@@ -20,7 +20,7 @@ import makeWASocket, {
 import pino from 'pino';
 import qrcodeTerminal from 'qrcode-terminal';
 import type { BridgeConfig } from './config.js';
-import { RedisBus } from './redis.js';
+import { RedisBus, type IncomingEvent } from './redis.js';
 
 const logger = pino({ level: process.env.LOG_LEVEL ?? 'info' });
 
@@ -64,6 +64,103 @@ async function downloadToStaging(
   return filePath;
 }
 
+// contextInfo is nested per content type in WhatsApp's protobuf schema, not
+// on the message envelope itself — only these types can carry it.
+function getContextInfo(message: WAMessage) {
+  const content = message.message;
+  return (
+    content?.extendedTextMessage?.contextInfo ??
+    content?.imageMessage?.contextInfo ??
+    content?.videoMessage?.contextInfo ??
+    content?.documentMessage?.contextInfo ??
+    content?.audioMessage?.contextInfo ??
+    undefined
+  );
+}
+
+type QuotedInfo = Pick<
+  IncomingEvent,
+  'quoted_text' | 'quoted_media_path' | 'quoted_media_mime_type' | 'quoted_media_type_label'
+>;
+
+const NO_QUOTE: QuotedInfo = {
+  quoted_text: null,
+  quoted_media_path: null,
+  quoted_media_mime_type: null,
+  quoted_media_type_label: null,
+};
+
+// WhatsApp's reply/quote feature (SPEC.md §5.9/§7.6): contextInfo.quotedMessage
+// embeds the quoted content's own metadata (and, for media, everything
+// needed to re-download it) directly in this message's event — no lookup
+// against anything the bridge saw earlier is needed.
+async function resolveQuotedContext(
+  socket: WASocket,
+  msg: WAMessage,
+  config: BridgeConfig,
+): Promise<QuotedInfo> {
+  const contextInfo = getContextInfo(msg);
+  const quoted = contextInfo?.quotedMessage;
+  if (!quoted) return NO_QUOTE;
+
+  const quotedText = quoted.conversation ?? quoted.extendedTextMessage?.text;
+  if (quotedText) {
+    return { ...NO_QUOTE, quoted_text: quotedText };
+  }
+
+  const label = quoted.imageMessage
+    ? 'image'
+    : quoted.videoMessage
+      ? 'video'
+      : quoted.documentMessage
+        ? 'document'
+        : quoted.audioMessage
+          ? 'voice message'
+          : undefined;
+  if (!label) return NO_QUOTE; // e.g. a quoted sticker/poll — ignore rather than guess
+
+  try {
+    const quotedMsg: WAMessage = {
+      key: {
+        remoteJid: msg.key.remoteJid,
+        id: contextInfo?.stanzaId ?? undefined,
+        participant: contextInfo?.participant ?? undefined,
+        // Self-chat: every message here is "from me" either way (SPEC.md §4.1).
+        fromMe: true,
+      },
+      message: quoted,
+    };
+    const buffer = (await downloadMediaMessage(
+      quotedMsg,
+      'buffer',
+      {},
+      { logger, reuploadRequest: socket.updateMediaMessage },
+    )) as Buffer;
+
+    const dir = path.join(config.stagingDir, `quoted-${randomUUID()}`);
+    await mkdir(dir, { recursive: true });
+    const filePath = path.join(dir, guessFileName(quotedMsg));
+    await writeFile(filePath, buffer);
+
+    const mimeType =
+      quoted.imageMessage?.mimetype ??
+      quoted.videoMessage?.mimetype ??
+      quoted.documentMessage?.mimetype ??
+      quoted.audioMessage?.mimetype ??
+      null;
+
+    return {
+      quoted_text: null,
+      quoted_media_path: filePath,
+      quoted_media_mime_type: mimeType,
+      quoted_media_type_label: label,
+    };
+  } catch (err) {
+    logger.warn({ err }, 'failed to download quoted media; falling back to a text descriptor');
+    return { ...NO_QUOTE, quoted_media_type_label: label };
+  }
+}
+
 async function handleMessage(
   socket: WASocket,
   msg: WAMessage,
@@ -105,6 +202,7 @@ async function handleMessage(
       logger.warn({ contentType, message: msg.message }, 'text message resolved to empty text');
       return;
     }
+    const quoted = await resolveQuotedContext(socket, msg, config);
     await bus.publishIncoming({
       message_id: messageId,
       timestamp,
@@ -113,6 +211,7 @@ async function handleMessage(
       text,
       media_path: null,
       media_mime_type: null,
+      ...quoted,
     });
     logger.info({ messageId, textLength: text.length }, 'published incoming text message');
     return;
@@ -120,6 +219,7 @@ async function handleMessage(
 
   if (contentType === 'audioMessage' && msg.message.audioMessage?.ptt) {
     const mediaPath = await downloadToStaging(socket, msg, messageId, config);
+    const quoted = await resolveQuotedContext(socket, msg, config);
     await bus.publishIncoming({
       message_id: messageId,
       timestamp,
@@ -128,6 +228,7 @@ async function handleMessage(
       text: null,
       media_path: mediaPath,
       media_mime_type: msg.message.audioMessage.mimetype ?? null,
+      ...quoted,
     });
     return;
   }
@@ -151,6 +252,7 @@ async function handleMessage(
       msg.message.documentMessage?.mimetype ??
       msg.message.audioMessage?.mimetype ??
       null;
+    const quoted = await resolveQuotedContext(socket, msg, config);
     await bus.publishIncoming({
       message_id: messageId,
       timestamp,
@@ -159,6 +261,7 @@ async function handleMessage(
       text: caption,
       media_path: mediaPath,
       media_mime_type: mimeType,
+      ...quoted,
     });
     return;
   }
@@ -174,6 +277,7 @@ interface OwnIdentity {
 export async function startBridge(config: BridgeConfig, bus: RedisBus): Promise<void> {
   await mkdir(config.authDir, { recursive: true });
   await mkdir(config.stagingDir, { recursive: true });
+  await mkdir(config.outgoingStagingDir, { recursive: true });
 
   const { state, saveCreds } = await useMultiFileAuthState(config.authDir);
 
@@ -230,7 +334,27 @@ export async function startBridge(config: BridgeConfig, bus: RedisBus): Promise<
       logger.warn('dropping outgoing message: not yet connected to WhatsApp');
       return;
     }
-    for (const chunk of splitText(event.text)) {
+    if (event.media_path) {
+      const buffer = await readFile(event.media_path);
+      const mimetype = event.media_mime_type ?? 'application/octet-stream';
+      if (mimetype.startsWith('audio/')) {
+        await socket.sendMessage(me.pn, { audio: buffer, mimetype, ptt: true });
+      } else {
+        await socket.sendMessage(me.pn, {
+          document: buffer,
+          mimetype,
+          fileName: event.media_filename ?? 'file',
+          caption: event.caption ?? undefined,
+        });
+      }
+      if (event.delete_after_send) {
+        await unlink(event.media_path).catch((err: unknown) => {
+          logger.warn({ err, path: event.media_path }, 'failed to clean up staged outgoing media');
+        });
+      }
+      return;
+    }
+    for (const chunk of splitText(event.text ?? '')) {
       await socket.sendMessage(me.pn, { text: chunk });
     }
   });
