@@ -194,6 +194,7 @@ All commands are plain text messages in the self-chat, starting with `/`.
 | `/enable` | Allow messages to reach Claude Code (global, all projects). |
 | `/disable` | Stop messages from reaching Claude Code (global, all projects) — see §7.1. |
 | `/status` | Report enabled/disabled state, active project, and whether it's busy or idle. |
+| `/c <text>` | Send `<text>` to Claude Code verbatim as the prompt, bypassing the command table above — see §7.3. |
 | `/help` | List available commands. |
 
 Any message not starting with `/` is treated as a prompt (or, for voice/attachments, as described in §5.2/§5.3) for whichever project is currently active, **provided the enabled/disabled toggle (§7.1) is on**. There must always be a default active project on startup (first entry in the configured project list) so an owner who forgets to `/project` first still gets a sensible result.
@@ -219,6 +220,14 @@ Claude Code's working-directory confinement to a pre-configured project list (§
   - `<name>` already a registered project → rejected, points to `/project <name>` instead.
   - A folder named `<name>` already exists under `project_root` but isn't registered → rejected outright, **not** silently adopted — an unregistered pre-existing folder could contain content the owner never intended to expose to a `--dangerously-skip-permissions` Claude Code session.
 - **Persisted separately from `config.yaml`.** New projects are recorded in their own local JSON state file (same pattern as §7.1's toggle state) and merged with `config.yaml`'s static project list at orchestrator startup. `config.yaml` itself is never programmatically rewritten, so hand-written comments/formatting are never at risk. A dynamic project whose folder is later deleted out-of-band is silently skipped on the next startup (logged, not an error) rather than crashing the orchestrator.
+
+### 7.3 Escaping to Claude Code's own commands/skills (`/c`)
+
+Claude Code CLI has its own slash-command vocabulary (built-ins like `/usage`, plus plugin-provided skills like `/mattpocock-skills:grill-me`) that is entirely separate from this integration's command table above. Since §7 already claims every message starting with `/` for the orchestrator's own commands, anything typed as e.g. `/usage` would otherwise be swallowed and rejected as "Unknown command" before ever reaching Claude Code.
+
+`/c <text>` is the escape hatch: `<text>` is forwarded verbatim as the Claude Code prompt, exactly as if it had been sent without a leading `/c ` (same busy-check, session-resume, and progress-update path as any other prompt — §5.4-§5.8). No special parsing of `<text>` is done on the orchestrator side; Claude Code CLI itself recognizes slash-command/skill syntax in the prompt it receives and dispatches accordingly (confirmed empirically: `claude -p "/mattpocock-skills:grill-me ..."` headless correctly invokes the `Skill` tool, the same as the interactive CLI). Some purely-interactive Claude Code built-ins (e.g. `/help`) reply "isn't available in this environment" headless regardless of how the prompt reaches them — that is a Claude Code CLI limitation, not something `/c` can work around.
+
+`/c` is content bound for Claude, so — unlike the meta-commands in §7 — it is gated by the enabled/disabled toggle (§7.1) exactly like plain text: a `/c` sent while disabled is silently ignored, not rejected as an error.
 
 ## 8. Configuration
 
@@ -317,3 +326,5 @@ progress_updates:
 | 26 | Dynamic project naming | Flat names only, regex-validated — no nested paths |
 | 27 | `/create` collision handling | Reject both directions (registered name, or unregistered existing folder) — never silently adopt |
 | 28 | `/create` naming | `/create`, not `/newproject` — avoids clashing with `/new` and `/project` |
+| 29 | Reaching Claude Code's own commands/skills | Dedicated escape command `/c <text>`, not a blanket fallthrough of unrecognized `/word` text — keeps the typo-safety of "Unknown command" errors for the orchestrator's own commands |
+| 30 | `/c` toggle interaction | Gated by `/enable`/`/disable` like plain text, not always-on like the meta-commands — it delivers content to Claude, which is exactly what `/disable` suppresses |

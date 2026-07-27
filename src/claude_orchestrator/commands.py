@@ -14,6 +14,8 @@ HELP_TEXT = (
     "/enable — allow messages to reach Claude Code\n"
     "/disable — stop messages from reaching Claude Code (for personal notes/backups)\n"
     "/status — show enabled/disabled state, active project, and busy/idle\n"
+    "/c <text> — send <text> to Claude Code verbatim, e.g. \"/c /usage\" or "
+    "\"/c /grill-me an idea\" (bypasses the commands above)\n"
     "/help — show this message\n"
     "Anything else is sent to Claude Code as a prompt, unless disabled."
 )

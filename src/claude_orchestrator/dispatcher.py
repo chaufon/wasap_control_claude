@@ -258,6 +258,19 @@ class Dispatcher:
             await self._reply(HELP_TEXT, message)
             return
 
+        if command.name == "c":
+            # Escape hatch for Claude Code's own slash commands/skills (e.g. "/c
+            # /usage"), which would otherwise be swallowed by the command table
+            # above. Content bound for Claude, so it honors the toggle like any
+            # other prompt — unlike the meta-commands above (SPEC.md §7.3).
+            if not self._toggle.claude_enabled:
+                return
+            if not command.arg:
+                await self._reply("Usage: /c <text>", message)
+                return
+            await self._handle_prompt(command.arg, message)
+            return
+
         await self._reply(f"❌ Unknown command '/{command.name}'. Send /help for the list.", message)
 
     async def _handle_create(self, command: Command, message: IncomingMessage) -> None:

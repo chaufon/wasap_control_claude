@@ -129,6 +129,10 @@ In your "Message Yourself" WhatsApp chat:
 - `/stop` — cancel the task currently running for the active project.
 - `/enable` / `/disable` — allow/stop messages from reaching Claude Code.
 - `/status` — enabled/disabled state, active project, busy/idle.
+- `/c <text>` — send `<text>` to Claude Code verbatim as the prompt, e.g.
+  `/c /usage` or `/c /grill-me an idea` — use this to reach Claude Code's own
+  commands/skills, which would otherwise be swallowed as an unrecognized
+  command above. Gated by `/enable`/`/disable` like plain text (SPEC.md §7.3).
 - `/help` — show the command list.
 
 ## Repository layout
