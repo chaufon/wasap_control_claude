@@ -27,4 +27,5 @@ dump.rdb
 
 # Editor / OS
 .vscode/
+.idea/
 .DS_Store
