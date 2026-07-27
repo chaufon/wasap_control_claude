@@ -38,3 +38,36 @@ def load_state(path: Path = STATE_PATH) -> ToggleState:
 def save_state(state: ToggleState, path: Path = STATE_PATH) -> None:
     path.parent.mkdir(parents=True, exist_ok=True)
     path.write_text(json.dumps(asdict(state)), encoding="utf-8")
+
+
+DYNAMIC_PROJECTS_PATH = Path.home() / ".local" / "share" / "claude-orchestrator" / "dynamic_projects.json"
+
+
+@dataclass
+class DynamicProjectEntry:
+    name: str
+    path: str
+
+
+def load_dynamic_projects(path: Path = DYNAMIC_PROJECTS_PATH) -> list[DynamicProjectEntry]:
+    """Projects created via /create (SPEC.md §7.2) — kept separate from
+    config.yaml so the hand-curated file is never programmatically rewritten."""
+    if not path.exists():
+        return []
+    try:
+        data = json.loads(path.read_text(encoding="utf-8"))
+        return [
+            DynamicProjectEntry(name=entry["name"], path=entry["path"])
+            for entry in data.get("projects", [])
+        ]
+    except (json.JSONDecodeError, OSError, KeyError):
+        logger.exception("failed to read dynamic projects file %s; ignoring", path)
+        return []
+
+
+def add_dynamic_project(entry: DynamicProjectEntry, path: Path = DYNAMIC_PROJECTS_PATH) -> None:
+    entries = load_dynamic_projects(path)
+    entries.append(entry)
+    path.parent.mkdir(parents=True, exist_ok=True)
+    payload = {"projects": [asdict(e) for e in entries]}
+    path.write_text(json.dumps(payload), encoding="utf-8")

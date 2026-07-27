@@ -8,6 +8,7 @@ HELP_TEXT = (
     "Available commands:\n"
     "/project <name> — switch the active project\n"
     "/projects — list configured projects\n"
+    "/create <name> — create a new project folder and switch to it\n"
     "/new — start a fresh session for the active project\n"
     "/stop — cancel the task currently running for the active project\n"
     "/enable — allow messages to reach Claude Code\n"

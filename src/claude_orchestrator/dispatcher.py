@@ -7,6 +7,7 @@ from __future__ import annotations
 import asyncio
 import contextlib
 import logging
+import re
 import shutil
 from collections.abc import Awaitable, Callable
 from dataclasses import dataclass, field
@@ -19,10 +20,22 @@ from .config import Config, ProjectConfig
 from .formatting import format_response
 from .models import IncomingMessage, OutgoingMessage
 from .redis_client import RedisBus
-from .state import ToggleState, load_state, save_state
+from .state import (
+    DynamicProjectEntry,
+    ToggleState,
+    add_dynamic_project,
+    load_dynamic_projects,
+    load_state,
+    save_state,
+)
 from .transcription import Transcriber
 
 logger = logging.getLogger(__name__)
+
+# Flat names only — no slashes/dots/".." (SPEC.md §7.2 Q4): this makes an
+# entire class of path-traversal bugs structurally impossible rather than
+# relying on careful normalization.
+_VALID_PROJECT_NAME_RE = re.compile(r"^[A-Za-z0-9_-]{1,100}$")
 
 
 @dataclass
@@ -93,8 +106,32 @@ class Dispatcher:
         self._projects: dict[str, ProjectState] = {
             p.name: ProjectState(config=p) for p in config.projects
         }
+        self._merge_dynamic_projects()
         self._active_project = config.default_project.name
         self._toggle: ToggleState = load_state()
+
+    def _merge_dynamic_projects(self) -> None:
+        """Fold in projects created via /create (SPEC.md §7.2), skipping any
+        whose folder has since been removed or that collide with a
+        statically-configured project name."""
+        for entry in load_dynamic_projects():
+            if entry.name in self._projects:
+                logger.warning(
+                    "dynamic project '%s' collides with a configured project; ignoring",
+                    entry.name,
+                )
+                continue
+            path = Path(entry.path)
+            if not path.is_dir():
+                logger.warning(
+                    "dynamic project '%s' path no longer exists; skipping: %s",
+                    entry.name,
+                    path,
+                )
+                continue
+            self._projects[entry.name] = ProjectState(
+                config=ProjectConfig(name=entry.name, path=path)
+            )
 
     async def run(self) -> None:
         async for message in self._bus.incoming_messages():
@@ -172,6 +209,10 @@ class Dispatcher:
             await self._reply("Configured projects:\n" + "\n".join(lines) + marker, message)
             return
 
+        if command.name == "create":
+            await self._handle_create(command, message)
+            return
+
         if command.name == "new":
             state = self._projects[self._active_project]
             state.session_id = None
@@ -218,6 +259,50 @@ class Dispatcher:
             return
 
         await self._reply(f"❌ Unknown command '/{command.name}'. Send /help for the list.", message)
+
+    async def _handle_create(self, command: Command, message: IncomingMessage) -> None:
+        if self._config.project_root is None:
+            await self._reply(
+                "❌ /create is not configured — set project_root in config.yaml first.",
+                message,
+            )
+            return
+
+        if not command.arg:
+            await self._reply("Usage: /create <name>", message)
+            return
+
+        name = command.arg
+        if not _VALID_PROJECT_NAME_RE.match(name):
+            await self._reply(
+                "❌ Invalid project name. Use only letters, numbers, hyphens, and "
+                "underscores (1-100 characters) — no slashes or nested paths.",
+                message,
+            )
+            return
+
+        if name in self._projects:
+            await self._reply(
+                f"❌ Project '{name}' already exists. Use /project {name} to switch to it.",
+                message,
+            )
+            return
+
+        path = self._config.project_root / name
+        if path.exists():
+            await self._reply(
+                f"❌ A folder named '{name}' already exists under "
+                f"{self._config.project_root} but isn't a registered project. "
+                "Pick a different name.",
+                message,
+            )
+            return
+
+        path.mkdir(parents=True)
+        self._projects[name] = ProjectState(config=ProjectConfig(name=name, path=path))
+        add_dynamic_project(DynamicProjectEntry(name=name, path=str(path)))
+        self._active_project = name
+        await self._reply(f"✅ Created and switched to project '{name}' ({path}).", message)
 
     async def _handle_prompt(self, prompt: str, message: IncomingMessage) -> None:
         state = self._projects[self._active_project]

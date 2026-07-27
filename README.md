@@ -56,6 +56,9 @@ Edit `~/.config/claude-orchestrator/config.yaml`:
   (see below); copy the `pn` value in and restart.
 - `projects` — list of `{name, path}` pairs Claude Code is allowed to run
   against (SPEC.md §3, §4.4). Add every project you want reachable.
+- `project_root` — optional. Parent directory `/create <name>` is allowed
+  to make new project folders under (SPEC.md §7.2). Leave unset to disable
+  `/create` entirely.
 
 ## Pair with WhatsApp
 
@@ -119,6 +122,9 @@ In your "Message Yourself" WhatsApp chat:
   the backup, nothing is copied elsewhere.
 - `/project <name>` — switch active project.
 - `/projects` — list configured projects.
+- `/create <name>` — create a new project folder under `project_root` and
+  switch to it (only if `project_root` is configured; flat names only, no
+  slashes — SPEC.md §7.2).
 - `/new` — reset the active project's Claude Code session.
 - `/stop` — cancel the task currently running for the active project.
 - `/enable` / `/disable` — allow/stop messages from reaching Claude Code.

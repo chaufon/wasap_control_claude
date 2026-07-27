@@ -62,6 +62,9 @@ class Config:
     whisper: WhisperConfig = field(default_factory=WhisperConfig)
     redis: RedisConfig = field(default_factory=RedisConfig)
     progress_updates: ProgressUpdatesConfig = field(default_factory=ProgressUpdatesConfig)
+    # Parent directory /create is allowed to make new project folders under
+    # (SPEC.md §7.2). None means /create is not configured/available.
+    project_root: Path | None = None
 
     @property
     def default_project(self) -> ProjectConfig:
@@ -105,6 +108,8 @@ def load_config(path: Path | None = None) -> Config:
     whisper_raw = raw.get("whisper") or {}
     redis_raw = raw.get("redis") or {}
     progress_raw = raw.get("progress_updates") or {}
+    project_root_raw = raw.get("project_root")
+    project_root = Path(project_root_raw).expanduser() if project_root_raw else None
 
     return Config(
         whatsapp=WhatsAppConfig(allowed_sender_jid=whatsapp_raw["allowed_sender_jid"]),
@@ -126,4 +131,5 @@ def load_config(path: Path | None = None) -> Config:
         progress_updates=ProgressUpdatesConfig(
             interval_seconds=int(progress_raw.get("interval_seconds", 10)),
         ),
+        project_root=project_root,
     )

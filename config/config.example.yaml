@@ -19,6 +19,14 @@ projects:
   # - name: another-project
   #   path: /home/centos/PycharmProjects/another-project
 
+# Optional. Parent directory /create is allowed to make new project folders
+# under (SPEC.md §7.2) — e.g. "/create foo" makes "<project_root>/foo" and
+# switches to it. Names are flat only (no slashes/"..") and validated
+# against a safe charset, so this stays bounded to one tree. Projects
+# created this way are tracked in their own state file, not written back
+# into this file — leave unset to disable /create entirely.
+project_root: /home/centos/PycharmProjects
+
 claude_code:
   binary: claude
   # Hard timeout per task; after this the process is killed and the

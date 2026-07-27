@@ -188,6 +188,7 @@ All commands are plain text messages in the self-chat, starting with `/`.
 |---|---|
 | `/project <name>` | Switch the active project for this conversation to `<name>` (must exist in configured project list). |
 | `/projects` | List configured project names and their paths. |
+| `/create <name>` | Create a new project folder under `project_root` and switch to it — see §7.2. |
 | `/new` | Reset the active project's Claude Code session — the next prompt starts a fresh conversation instead of continuing. |
 | `/stop` | Cancel the currently running task for the active project, if any. |
 | `/enable` | Allow messages to reach Claude Code (global, all projects). |
@@ -207,6 +208,18 @@ The owner's everyday personal WhatsApp number is used for this integration, and 
 - `/disable` does not cancel a task already running (`/stop` still does that separately); it only gates *new* prompts from being dispatched.
 - The toggle state persists across orchestrator restarts (a small local JSON state file, independent of `config.yaml`), so a deliberate `/disable` survives a crash/reboot/service update instead of silently reverting.
 
+### 7.2 Dynamic project creation (`/create`)
+
+Claude Code's working-directory confinement to a pre-configured project list (§9) is the only safety boundary once permissions are auto-approved, so letting a WhatsApp message target an arbitrary filesystem path was explicitly rejected (§7 Q4 of the original design interview). `/create` reopens *just enough* of that to be useful without reintroducing an open-ended path:
+
+- **Bounded to one configured root.** `project_root` in `config.yaml` is the only parent directory `/create` may ever create folders under. If unset, `/create` is disabled entirely (replies with a config-not-set error).
+- **Flat names only.** `<name>` must match `^[A-Za-z0-9_-]{1,100}$` — no slashes, no `..`, no nested paths. This makes path-traversal structurally impossible rather than relying on normalization logic to catch it.
+- **One combined action.** `/create <name>` creates `<project_root>/<name>`, registers it, and switches the active project to it in one step.
+- **Fails safe on collision, in both directions:**
+  - `<name>` already a registered project → rejected, points to `/project <name>` instead.
+  - A folder named `<name>` already exists under `project_root` but isn't registered → rejected outright, **not** silently adopted — an unregistered pre-existing folder could contain content the owner never intended to expose to a `--dangerously-skip-permissions` Claude Code session.
+- **Persisted separately from `config.yaml`.** New projects are recorded in their own local JSON state file (same pattern as §7.1's toggle state) and merged with `config.yaml`'s static project list at orchestrator startup. `config.yaml` itself is never programmatically rewritten, so hand-written comments/formatting are never at risk. A dynamic project whose folder is later deleted out-of-band is silently skipped on the next startup (logged, not an error) rather than crashing the orchestrator.
+
 ## 8. Configuration
 
 A local config file (e.g. `~/.config/claude-orchestrator/config.yaml`) defines:
@@ -219,6 +232,9 @@ projects:
   - name: wasap-grill-me
     path: /home/centos/PycharmProjects/wasap_grill_me
   # additional projects as needed
+
+# optional; parent directory /create may make new project folders under (§7.2)
+project_root: /home/centos/PycharmProjects
 
 claude_code:
   binary: claude
@@ -242,7 +258,7 @@ progress_updates:
 
 ## 9. Security Considerations
 
-- **Blast radius containment:** Claude Code always runs with permissions auto-approved, so the *only* safety boundary is the working-directory confinement to configured project paths. The implementation must guarantee the `claude` process is never launched with a working directory outside the configured project list, and should not blindly trust paths embedded in message text for anything other than the attachment-inbox convention in §5.3.
+- **Blast radius containment:** Claude Code always runs with permissions auto-approved, so the *only* safety boundary is the working-directory confinement to configured project paths. The implementation must guarantee the `claude` process is never launched with a working directory outside the configured project list, and should not blindly trust paths embedded in message text for anything other than the attachment-inbox convention in §5.3. `/create` (§7.2) is the one deliberate, narrow exception to "the project list is static" — it can only ever add folders under one pre-configured `project_root`, with a flat, regex-validated name, so the boundary itself never moves.
 - **Self-chat scoping is the primary access control.** Only the account owner can write to their own "Message Yourself" thread, which is why this is a stronger boundary than sender-ID filtering alone. `message.key.fromMe` (§4.1) is retained as defense-in-depth in case of a future Baileys/WhatsApp behavior change around that chat.
 - **No inbound network exposure.** Redis is loopback-only; the bridge makes only outbound connections to WhatsApp's servers. There is no listening port reachable from outside the machine.
 - **Local secrets:** Baileys' auth/session directory contains credentials equivalent to a logged-in WhatsApp Web session — treat it like a credential store (filesystem permissions restricted to the owning user, excluded from any backups that leave the machine unencrypted).
@@ -295,3 +311,9 @@ progress_updates:
 | 20 | Disabled-message handling | Do nothing extra — WhatsApp's own history is the backup, no separate archiving |
 | 21 | Toggle scope | Global (all projects), not per-project |
 | 22 | Toggle persistence | Persisted to disk, survives restarts; fresh install defaults to enabled |
+| 23 | Dynamic project scope | Bounded to one configured `project_root`, not an arbitrary path |
+| 24 | `/create` UX | One combined command (create + switch), not two steps |
+| 25 | Dynamic project persistence | Own state file, `config.yaml` never programmatically rewritten |
+| 26 | Dynamic project naming | Flat names only, regex-validated — no nested paths |
+| 27 | `/create` collision handling | Reject both directions (registered name, or unregistered existing folder) — never silently adopt |
+| 28 | `/create` naming | `/create`, not `/newproject` — avoids clashing with `/new` and `/project` |
