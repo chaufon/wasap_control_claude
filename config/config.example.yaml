@@ -1,0 +1,46 @@
+# Copy this file to ~/.config/claude-orchestrator/config.yaml (or set
+# CLAUDE_ORCHESTRATOR_CONFIG to point elsewhere) and fill in your own
+# values. Read by both the Python orchestrator and the Node bridge
+# (SPEC.md §8).
+
+whatsapp:
+  # Your own phone-number-form WhatsApp JID, e.g. "51987654321@s.whatsapp.net"
+  # — the bridge logs it as the "pn" field of { pn, lid } the first time you
+  # send yourself a message after pairing. Use "pn" here, not "lid": it's
+  # also the address the bridge sends replies to. WhatsApp addresses
+  # self-chat messages under either identity depending on which client sent
+  # them (phone app -> lid, Desktop/Web -> pn); the bridge already accepts
+  # both automatically, so only "pn" needs to be configured here (SPEC.md §4.1).
+  allowed_sender_jid: "REPLACE_ME@s.whatsapp.net"
+
+projects:
+  - name: wasap-grill-me
+    path: /home/centos/PycharmProjects/wasap_grill_me
+  # - name: another-project
+  #   path: /home/centos/PycharmProjects/another-project
+
+claude_code:
+  binary: claude
+  # Hard timeout per task; after this the process is killed and the
+  # request is treated as a failure (SPEC.md §5.7).
+  task_timeout_seconds: 900
+
+whisper:
+  model: large-v3
+  device: cuda
+  fallback_device: cpu
+  fallback_model: medium
+
+redis:
+  host: 127.0.0.1
+  port: 6379
+  incoming_channel: "whatsapp:incoming"
+  outgoing_channel: "whatsapp:outgoing"
+
+progress_updates:
+  interval_seconds: 10
+
+# Node bridge only.
+bridge:
+  auth_dir: "~/.local/share/whatsapp-bridge/auth"
+  staging_dir: "/tmp/whatsapp-bridge/incoming"

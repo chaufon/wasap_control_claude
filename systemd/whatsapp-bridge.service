@@ -1,0 +1,19 @@
+[Unit]
+Description=WhatsApp <-> Redis bridge for Claude Code remote control
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+WorkingDirectory=%h/PycharmProjects/wasap_grill_me/whatsapp-bridge
+# node is nvm-managed (not at /usr/bin/node); systemd --user units don't
+# source .bashrc/nvm.sh, so this must be an absolute path. Update it after
+# `nvm install`-ing a different default: `nvm which default` prints the
+# current target.
+ExecStart=%h/.nvm/versions/node/v20.20.2/bin/node dist/index.js
+Restart=on-failure
+RestartSec=5
+Environment=LOG_LEVEL=info
+
+[Install]
+WantedBy=default.target

@@ -1,0 +1,30 @@
+.venv/
+__pycache__/
+*.pyc
+build/
+dist/
+*.egg-info/
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+
+whatsapp-bridge/node_modules/
+whatsapp-bridge/dist/
+
+# WhatsApp auth credentials — never commit these.
+**/auth_info_baileys/
+**/whatsapp-bridge/auth/
+
+# Local secrets — only config.example.yaml is tracked.
+config/config.yaml
+.env
+.env.*
+
+# Redis local dump.
+dump.rdb
+
+*.log
+
+# Editor / OS
+.vscode/
+.DS_Store
