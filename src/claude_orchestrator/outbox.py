@@ -15,9 +15,9 @@ from pathlib import Path
 MAX_FILE_SIZE_BYTES = 64 * 1024 * 1024
 
 # Passed via --append-system-prompt on every Claude Code invocation
-# (claude_code.py) — confirmed empirically that a resumed session picks up
-# a freshly appended system prompt each turn, not just the one from session
-# start, so this reliably stays in context for the session's whole lifetime.
+# (claude_code.py). A resumed session picks up a freshly appended system
+# prompt on every turn, not just the one from session start, so this stays
+# in context for the session's whole lifetime.
 OUTBOX_SYSTEM_PROMPT = (
     "If asked to send the user a file over WhatsApp (e.g. a generated PDF "
     "report), save it into ./whatsapp-outbox/ (create the folder if it "

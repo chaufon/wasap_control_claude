@@ -19,12 +19,13 @@ projects:
   # - name: another-project
   #   path: /home/centos/PycharmProjects/another-project
 
-# Optional. Parent directory /create is allowed to make new project folders
-# under (SPEC.md §7.2) — e.g. "/create foo" makes "<project_root>/foo" and
-# switches to it. Names are flat only (no slashes/"..") and validated
-# against a safe charset, so this stays bounded to one tree. Projects
-# created this way are tracked in their own state file, not written back
-# into this file — leave unset to disable /create entirely.
+# Optional. Every immediate, non-hidden folder under here is automatically
+# an available project (SPEC.md §7.2) — switch with /project <name-or-number>,
+# no registration needed, discovered live each time. Also the only place
+# /create <name> is allowed to make new folders (flat names only, no
+# slashes/".." — validated against a safe charset, bounded to one tree).
+# Leave unset to only use the static `projects` list above and disable
+# /create.
 project_root: /home/centos/PycharmProjects
 
 claude_code:

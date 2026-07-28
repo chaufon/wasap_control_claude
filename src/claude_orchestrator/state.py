@@ -2,9 +2,8 @@
 
 The self-chat is also used for personal notes/backups (not just Claude Code
 commands), so routing is gated by this toggle rather than being always-on.
-Persisted across restarts so a deliberate /disable is never silently
-undone by a service restart; a fresh install with no state file yet
-defaults to enabled, matching the original always-on behavior.
+Persisted across restarts so a deliberate /disable survives a service
+restart; a fresh install with no state file yet defaults to enabled.
 """
 
 from __future__ import annotations

@@ -167,7 +167,7 @@ class Dispatcher:
         Once adopted it behaves exactly like any statically-configured
         project — session continuity included — for the rest of this
         process's lifetime; nothing is persisted to disk, so an untouched
-        folder is simply rediscovered live next time (§12 decision #51)."""
+        folder is simply rediscovered live next time (SPEC.md §7.2)."""
         all_projects = self._all_known_projects()
         if arg.isdigit():
             names = list(all_projects)
@@ -213,7 +213,7 @@ class Dispatcher:
                 await self._handle_command(command, message)
                 return
             if not self._toggle.claude_enabled:
-                return  # personal note/backup content: leave it alone (SPEC.md addendum)
+                return  # personal note/backup content: leave it alone (SPEC.md §7.1)
             prefix = await self._build_reply_context(message)
             await self._handle_prompt(prefix + text, message)
             return

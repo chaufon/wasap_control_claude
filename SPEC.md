@@ -1,8 +1,6 @@
 # Claude Code Remote Control via WhatsApp — Technical Specification
 
-**Status:** Ready for implementation
-**Author:** Produced via requirements interview (grilling session) with the project owner
-**Date:** 2026-07-26
+**Status:** Implemented and in daily use
 
 ## 1. Purpose
 
@@ -68,7 +66,7 @@ Two independently-managed local processes (`whatsapp-bridge` and `claude-orchest
 - Baileys is Node/TypeScript-only, which is why this component exists in a different language from the rest of the system — its sole job is the WhatsApp wire protocol.
 - Persists Baileys auth/session credentials to a local directory (e.g. `~/.local/share/whatsapp-bridge/auth/`) so re-pairing isn't needed after a restart.
 - Filters all incoming events down to **only messages in the owner's own "Message Yourself" chat** (the thread where the account's own JID is both sender and recipient). Every other chat and group is ignored entirely at this layer — it is never even forwarded to Redis.
-  - **LID caveat (confirmed live, 2026-07):** WhatsApp's newer identity system means a self-chat message can arrive addressed under either the account's phone-number JID (`...@s.whatsapp.net`) or its LID JID (`...@lid`), depending on which client sent it — a message typed on the phone itself was observed arriving as `@lid`, not `@s.whatsapp.net`. The bridge captures both identities at connection time (`socket.user.id` and `socket.user.lid`) and treats a match against *either* as the self-chat. A filter checking only one address silently drops every message with no error.
+  - **LID caveat:** WhatsApp's newer identity system means a self-chat message can arrive addressed under either the account's phone-number JID (`...@s.whatsapp.net`) or its LID JID (`...@lid`), depending on which client sent it — the phone app addresses it via LID, WhatsApp Desktop/Web via the phone-number JID. The bridge captures both identities at connection time (`socket.user.id` and `socket.user.lid`) and treats a match against *either* as the self-chat. A filter checking only one address would silently drop every message from the other client with no error.
 - Downloads and decrypts any media (voice notes, images, documents) attached to a qualifying message using Baileys' media-download API, writing it to a shared staging directory (e.g. `/var/tmp/whatsapp-bridge/incoming/<message-id>/`).
 - Publishes a normalized JSON event to Redis channel `whatsapp:incoming` for every qualifying message (see §6.1 for schema).
 - Subscribes to Redis channel `whatsapp:outgoing` and sends any message published there back into the self-chat, splitting into multiple WhatsApp messages if the text exceeds ~4000 characters.
@@ -94,8 +92,8 @@ Two independently-managed local processes (`whatsapp-bridge` and `claude-orchest
 - The CLI must be invoked under the same OS user/session that has completed the interactive `claude login` OAuth flow for the Pro subscription; no API key is configured or used anywhere in this system.
 - Session continuity uses the CLI's own resume mechanism (`--continue` / `--resume <session-id>`) keyed per project, so conversation context persists across messages until explicitly reset.
 - The orchestrator parses the `stream-json` event stream to (a) detect tool calls/results for progress reporting, and (b) capture the final response text.
-- Every invocation carries a fixed `--append-system-prompt` telling Claude Code about the `whatsapp-outbox/` convention (§7.5) — confirmed empirically that a resumed session (`--resume`) picks up this system prompt fresh on each turn, not just the one present at session start, so the convention stays in context for the session's whole lifetime, not only its first message.
-- The subprocess's stdout is read with an explicit 32MB line buffer (`asyncio.create_subprocess_exec(..., limit=...)`), not the asyncio default of 64KiB — a single `stream-json` event line can exceed that default once file content (e.g. reading a large PDF referenced from `whatsapp-inbox/`) ends up embedded in a tool-result line, which otherwise crashes the read with `LimitOverrunError` mid-task (encountered live, 2026-07-27).
+- Every invocation carries a fixed `--append-system-prompt` telling Claude Code about the `whatsapp-outbox/` convention (§7.5). A resumed session (`--resume`) picks this up fresh on every turn, not just the one present at session start, so the convention stays in context for the session's whole lifetime, not only its first message.
+- The subprocess's stdout is read with an explicit 32MB line buffer (`asyncio.create_subprocess_exec(..., limit=...)`), not the asyncio default of 64KiB — a single `stream-json` event line can exceed that default once file content (e.g. reading a large PDF referenced from `whatsapp-inbox/`) ends up embedded in a tool-result line, which would otherwise crash the read with `LimitOverrunError` mid-task.
 
 ### 4.5 Redis
 
@@ -258,10 +256,10 @@ The owner's everyday personal WhatsApp number is used for this integration, and 
 
 ### 7.2 Project discovery (`project_root`) and dynamic creation (`/create`)
 
-Claude Code's working-directory confinement to a pre-configured project list (§9) is the only safety boundary once permissions are auto-approved, so letting a WhatsApp message target an arbitrary filesystem path was explicitly rejected (§7 Q4 of the original design interview). `project_root` is the one deliberate, bounded exception — the entire subtree the owner already trusts enough to let Claude Code run against, so *nothing under it* needs a separate registration step to become switchable:
+Claude Code's working-directory confinement to a pre-configured project list (§9) is the only safety boundary once permissions are auto-approved, so letting a WhatsApp message target an arbitrary filesystem path is never allowed. `project_root` is the one deliberate, bounded exception — the entire subtree the owner already trusts enough to let Claude Code run against, so *nothing under it* needs a separate registration step to become switchable:
 
-- **Every immediate, non-hidden subfolder of `project_root` is automatically an available project** — discovered live (re-scanned on every `/project`/`/projects` call, not cached), merged with `config.yaml`'s static project list and deduplicated both by name (a static entry always wins a name collision) *and* by resolved path (confirmed live: a static entry named e.g. `wasap-grill-me` pointing at a folder literally called `wasap_grill_me` must not also appear a second time under that basename — same directory, two names, would otherwise become two independent sessions racing against one `cwd`). If `project_root` is unset, only the static list is available, matching pre-`project_root` behavior.
-- **No registration step, no persisted project list.** Switching to a project_root folder for the first time (§7.2 below) or `/create`-ing one simply adds it to the orchestrator's in-memory project registry for the rest of that process's lifetime (session continuity — the active Claude Code session id — included); nothing is written to disk beyond the folder itself. An earlier design (§12 decision #25) persisted a separate dynamic-projects state file; that was deliberately replaced (§12 decision #51) once `project_root` itself became the source of truth — one less thing that can drift out of sync with the filesystem.
+- **Every immediate, non-hidden subfolder of `project_root` is automatically an available project** — discovered live (re-scanned on every `/project`/`/projects` call, not cached), merged with `config.yaml`'s static project list and deduplicated both by name (a static entry always wins a name collision) *and* by resolved path (a static entry named e.g. `wasap-grill-me` pointing at a folder literally called `wasap_grill_me` must not also appear a second time under that basename — same directory, two names, would otherwise become two independent sessions racing against one `cwd`). If `project_root` is unset, only the static list is available.
+- **No registration step, no persisted project list.** Switching to a project_root folder for the first time or `/create`-ing one simply adds it to the orchestrator's in-memory project registry for the rest of that process's lifetime (session continuity — the active Claude Code session id — included); nothing is written to disk beyond the folder itself. `project_root` is the single source of truth, so there's nothing else that needs to stay in sync with it.
 - **`/project <name-or-number>`** accepts either a project name or its number from the current `/projects` listing. Numbers reflect a fresh scan each time, sorted alphabetically for a predictable (if not permanently stable) order — list, then act on it promptly.
 - **`/create <name>`** still exists for the one thing discovery alone can't do: making a *new* empty folder. `<name>` must match `^[A-Za-z0-9_-]{1,100}$` — no slashes, no `..`, no nested paths, making path-traversal structurally impossible rather than relying on normalization logic to catch it. It's otherwise just `mkdir` + switch — no separate registration, since the folder is automatically a project the instant it exists. Fails safe on collision (name already available, from either source) rather than silently adopting or overwriting.
 
@@ -269,7 +267,7 @@ Claude Code's working-directory confinement to a pre-configured project list (§
 
 Claude Code CLI has its own slash-command vocabulary (built-ins like `/usage`, plus plugin-provided skills like `/mattpocock-skills:grill-me`) that is entirely separate from this integration's command table above. Since §7 already claims every message starting with `/` for the orchestrator's own commands, anything typed as e.g. `/usage` would otherwise be swallowed and rejected as "Unknown command" before ever reaching Claude Code.
 
-`/c <text>` is the escape hatch: `<text>` is forwarded verbatim as the Claude Code prompt, exactly as if it had been sent without a leading `/c ` (same busy-check, session-resume, and progress-update path as any other prompt — §5.4-§5.8). No special parsing of `<text>` is done on the orchestrator side; Claude Code CLI itself recognizes slash-command/skill syntax in the prompt it receives and dispatches accordingly (confirmed empirically: `claude -p "/mattpocock-skills:grill-me ..."` headless correctly invokes the `Skill` tool, the same as the interactive CLI). Two Claude Code CLI limitations are inherent to this and not something `/c` can work around: some purely-interactive built-ins (e.g. `/help`) reply "isn't available in this environment" headless regardless of how the prompt reaches them; and plugin skills must be addressed by their fully-qualified `plugin:skill` name (`/mattpocock-skills:grill-me`) — a bare short name like `/grill-me` gets "Unknown command" from Claude Code CLI itself (confirmed empirically the same way), not from the orchestrator.
+`/c <text>` is the escape hatch: `<text>` is forwarded verbatim as the Claude Code prompt, exactly as if it had been sent without a leading `/c ` (same busy-check, session-resume, and progress-update path as any other prompt — §5.4-§5.8). No special parsing of `<text>` is done on the orchestrator side; Claude Code CLI itself recognizes slash-command/skill syntax in the prompt it receives and dispatches accordingly, the same as the interactive CLI. Two Claude Code CLI limitations are inherent to this and not something `/c` can work around: some purely-interactive built-ins (e.g. `/help`) reply "isn't available in this environment" headless regardless of how the prompt reaches them; and plugin skills must be addressed by their fully-qualified `plugin:skill` name (`/mattpocock-skills:grill-me`) — a bare short name like `/grill-me` gets "Unknown command" from Claude Code CLI itself, not from the orchestrator.
 
 `/c` is content bound for Claude, so — unlike the meta-commands in §7 — it is gated by the enabled/disabled toggle (§7.1): a `/c` sent while disabled replies with an explicit "Claude Code is disabled" notice rather than running (§7.1).
 
@@ -299,7 +297,7 @@ The reverse of §5.3's incoming-attachment convention — Claude Code itself, no
 
 WhatsApp's native reply/quote feature, distinct from forwarding — see §5.10 for the step-by-step flow. Two things worth calling out about the design, not just the mechanics:
 
-- **No persistent tracking system.** An earlier design considered maintaining a WhatsApp-message-id → project-file-path index so a reply could resolve to an already-staged file without re-downloading. That was deliberately dropped as more complexity than this warrants — instead, a quoted attachment/voice note is simply re-downloaded fresh at reply-time (§5.10 step 3), the same one-shot media-download call already used for a normal attachment. No new state file, no bridge→orchestrator acknowledgment channel, nothing to keep in sync across a restart.
+- **No persistent tracking system.** A quoted attachment/voice note is simply re-downloaded fresh at reply-time (§5.10 step 3), the same one-shot media-download call already used for a normal attachment — not resolved through a WhatsApp-message-id → project-file-path index. No state file to maintain, no bridge→orchestrator acknowledgment channel, nothing that can fall out of sync across a restart.
 - **Content-hash filenames, both directions.** Because Claude Code could plausibly generate the same filename (e.g. `report.pdf`) more than once across different tasks, and because replies mean the same underlying file can end up referenced from more than one place over time, both `whatsapp-inbox/` (§5.3) and `whatsapp-outbox/sent/` (§7.5) suffix the stored filename with the first 8 hex characters of the file's own sha256 (e.g. `report_a3f9c2d1.pdf`) — identical content always produces the identical suffix, and two different files never silently overwrite one another.
 
 ## 8. Configuration
@@ -393,49 +391,46 @@ bridge:
 | 6 | Voice transcription engine | Local, GPU-accelerated (`faster-whisper`) |
 | 7 | Attachment handling | Fixed inbox folder inside active project |
 | 8 | Long-task feedback | Immediate ack + streamed progress |
-| 8b | Progress throttling | Time-based batching, ~10s |
-| 9 | Process persistence | Login-scoped `systemd --user` service; auto-suspend disabled |
-| 10 | Error handling | Sanitized WhatsApp summary + full local log |
-| 11 | Response formatting | Markdown→WhatsApp conversion + auto-split |
-| 12 | Language stack | Python orchestrator + Node/TS Baileys sidecar |
-| 13 | Inter-process communication | Local Redis pub/sub |
-| 14 | WhatsApp number | Owner's everyday personal number |
-| 15 | Message scoping | "Message Yourself" self-chat only |
-| 16 | Cancellation | `/stop` command (SIGTERM/SIGKILL) |
-| 17 | Concurrency | Reject with notice; no queueing, no parallel runs |
-| 18 | Whisper model | `large-v3`, GPU-accelerated |
-| 19 | Claude routing control | Stateful `/enable`/`/disable`/`/status` toggle (not a per-message marker) |
-| 20 | Disabled-message handling | Do nothing extra — WhatsApp's own history is the backup, no separate archiving |
-| 21 | Toggle scope | Global (all projects), not per-project |
-| 22 | Toggle persistence | Persisted to disk, survives restarts; fresh install defaults to enabled |
-| 23 | Dynamic project scope | Bounded to one configured `project_root`, not an arbitrary path |
+| 9 | Progress throttling | Time-based batching, ~10s |
+| 10 | Process persistence | Login-scoped `systemd --user` service; auto-suspend disabled |
+| 11 | Error handling | Sanitized WhatsApp summary + full local log |
+| 12 | Response formatting | Markdown→WhatsApp conversion + auto-split |
+| 13 | Language stack | Python orchestrator + Node/TS Baileys sidecar |
+| 14 | Inter-process communication | Local Redis pub/sub |
+| 15 | WhatsApp number | Owner's everyday personal number |
+| 16 | Message scoping | "Message Yourself" self-chat only |
+| 17 | Cancellation | `/stop` command (SIGTERM/SIGKILL) |
+| 18 | Concurrency | Reject with notice; no queueing, no parallel runs |
+| 19 | Whisper model | `large-v3`, GPU-accelerated |
+| 20 | Claude routing control | Stateful `/enable`/`/disable`/`/status` toggle (not a per-message marker) |
+| 21 | Disabled-message handling | Do nothing extra — WhatsApp's own history is the backup, no separate archiving |
+| 22 | Toggle scope | Global (all projects), not per-project |
+| 23 | Toggle persistence | Persisted to disk, survives restarts; fresh install defaults to enabled |
 | 24 | `/create` UX | One combined command (create + switch), not two steps |
-| 25 | Dynamic project persistence | Own state file, `config.yaml` never programmatically rewritten — **superseded by decision #51**: replaced with live `project_root` discovery, no persisted file at all |
-| 26 | Dynamic project naming | Flat names only, regex-validated — no nested paths |
-| 27 | `/create` collision handling | Reject both directions (registered name, or unregistered existing folder) — never silently adopt |
-| 28 | `/create` naming | `/create`, not `/newproject` — avoids clashing with `/new` and `/project` |
-| 29 | Reaching Claude Code's own commands/skills | Dedicated escape command `/c <text>`, not a blanket fallthrough of unrecognized `/word` text — keeps the typo-safety of "Unknown command" errors for the orchestrator's own commands |
-| 30 | `/c` toggle interaction | Gated by `/enable`/`/disable`, not always-on like the meta-commands — it delivers content to Claude, which is exactly what `/disable` suppresses |
-| 31 | Disabled-state reply for slash-commands | `/c` and unrecognized commands (e.g. `/usage`) get an explicit "Claude Code is disabled" reply while disabled, not silence and not "Unknown command" — a leading `/` is never a personal note, so silence (§20) doesn't apply, and the disabled state is more actionable than a bare "unknown command" error |
-| 32 | Voice-reply trigger | Global `/voice on`/`/voice off` toggle, independent of input modality — not "mirror the input" (voice-in → voice-out), not always-on, not a per-message opt-in |
-| 33 | Voice-reply mode | Voice in addition to text, never instead of it — avoids losing the searchable/copyable text record |
-| 34 | Voice command naming | `/voice on` \| `/voice off`, matching `/project <name>`'s single-command-plus-argument shape rather than `/enable`/`/disable`'s two-distinct-verbs shape |
-| 35 | TTS engine | Local `piper-tts`, CPU — fast enough without a GPU, avoiding VRAM contention with `faster-whisper`'s `large-v3` on this machine's single GPU |
-| 36 | Voice language selection | Detected per-reply via `langdetect`, from the reply's own text — not the input message's language, and not a static config default |
-| 37 | Voice model download | Automatic on first use, matching `faster-whisper`'s existing behavior — not a separate manual setup step |
-| 38 | TTS text preprocessing | Markdown stripped and code blocks omitted for the spoken copy only; the text-channel reply keeps full Markdown unchanged |
-| 39 | Outgoing-file trigger | Filesystem convention (`whatsapp-outbox/`), not a marker parsed out of Claude Code's free-form reply text — a folder Claude Code already has Write access to is more reliable than requiring exact parseable syntax in prose |
-| 40 | Making Claude Code aware of the outbox convention | Fixed `--append-system-prompt` on every invocation, not a per-project `CLAUDE.md` edit — works automatically in any configured project; confirmed empirically that it's re-applied fresh on resumed turns, not just at session start |
-| 41 | Outbox scope | Only the top level of `whatsapp-outbox/` itself is ever scanned/sent — nothing else Claude Code creates elsewhere in the project is touched |
-| 42 | Sent-file handling | Moved into `whatsapp-outbox/sent/` (kept, gitignored), not deleted — durable "already sent" tracking with no separate state file, and no loss if a send silently fails |
-| 43 | Outbox gitignore handling | Automatic, but only for projects that are already git repos — one less manual step without ever surprising a non-git folder with a new file |
-| 44 | Outbox file type/size limits | Any file type (not PDF-only), capped at 64MB with a clear rejection reply above the cap — no type allow-list to maintain, but no unbounded/silent large-file attempts either |
-| 45 | Outbox document caption | Filename shown as the WhatsApp caption, not sent bare |
-| 46 | Reply/quote scope | Text and attachments/voice notes, in either direction — not restricted to only the owner's own earlier messages |
-| 47 | Quoted-media handling | Re-download fresh at reply-time (one-shot, via the same media-download call as a normal attachment), not a persisted message-id→file-path tracking system — explicitly rejected as more complexity than warranted for this project right now |
-| 48 | Quoted-media scope narrowing | Considered re-download for every quoted type; landed on re-download for attachments/voice (worth the file being genuinely available to Claude Code) but no separate re-transcription step beyond what downloading + the normal voice flow already provides |
-| 49 | Content-hash filenames | Both `whatsapp-inbox/` and `whatsapp-outbox/sent/` suffix filenames with the first 8 hex chars of the file's sha256 — prevents same-named files (e.g. a regenerated report, or a file referenced by more than one reply over time) from silently overwriting one another |
-| 51 | Project discovery model | `project_root` itself is the source of truth (live-scanned every call) — not a persisted registry kept in sync with it; replaces decision #25's dynamic-projects state file entirely, for both `/create` and switching to a pre-existing folder |
-| 52 | Numbered project switching | `/project <name-or-number>` accepts either, resolved against a fresh `/projects`-style scan each time — not a separate command, not a stable/persisted numbering scheme |
-| 53 | Project adoption scope | First switch to a project_root folder adopts it in-memory only (session continuity preserved for that process's lifetime) — nothing persisted to disk, since decision #51 already makes the folder itself the durable record |
-| 54 | Discovery dedup key | By resolved path, not just by name — caught live: a static `config.yaml` project whose name doesn't match its own folder's basename (`wasap-grill-me` → `wasap_grill_me`) was appearing twice, which would have let two independent sessions run against the same directory at once |
+| 25 | `/create` naming rule | Flat names only, regex-validated — no nested paths |
+| 26 | `/create` collision handling | Reject on any existing name — from `config.yaml`, a `project_root` folder, or an on-disk folder — never silently adopt or overwrite |
+| 27 | `/create` command naming | `/create`, not `/newproject` — avoids clashing with `/new` and `/project` |
+| 28 | Reaching Claude Code's own commands/skills | Dedicated escape command `/c <text>`, not a blanket fallthrough of unrecognized `/word` text — keeps the typo-safety of "Unknown command" errors for the orchestrator's own commands |
+| 29 | `/c` toggle interaction | Gated by `/enable`/`/disable`, not always-on like the meta-commands — it delivers content to Claude, which is exactly what `/disable` suppresses |
+| 30 | Disabled-state reply for slash-commands | `/c` and unrecognized commands (e.g. `/usage`) get an explicit "Claude Code is disabled" reply while disabled, not silence and not "Unknown command" — a leading `/` is never a personal note, so silence (§21) doesn't apply, and the disabled state is more actionable than a bare "unknown command" error |
+| 31 | Voice-reply trigger | Global `/voice on`/`/voice off` toggle, independent of input modality — not "mirror the input" (voice-in → voice-out), not always-on, not a per-message opt-in |
+| 32 | Voice-reply mode | Voice in addition to text, never instead of it — avoids losing the searchable/copyable text record |
+| 33 | Voice command naming | `/voice on` \| `/voice off`, matching `/project <name>`'s single-command-plus-argument shape rather than `/enable`/`/disable`'s two-distinct-verbs shape |
+| 34 | TTS engine | Local `piper-tts`, CPU — fast enough without a GPU, avoiding VRAM contention with `faster-whisper`'s `large-v3` on this machine's single GPU |
+| 35 | Voice language selection | Detected per-reply via `langdetect`, from the reply's own text — not the input message's language, and not a static config default |
+| 36 | Voice model download | Automatic on first use, matching `faster-whisper`'s existing behavior — not a separate manual setup step |
+| 37 | TTS text preprocessing | Markdown stripped and code blocks omitted for the spoken copy only; the text-channel reply keeps full Markdown unchanged |
+| 38 | Outgoing-file trigger | Filesystem convention (`whatsapp-outbox/`), not a marker parsed out of Claude Code's free-form reply text — a folder Claude Code already has Write access to is more reliable than requiring exact parseable syntax in prose |
+| 39 | Making Claude Code aware of the outbox convention | Fixed `--append-system-prompt` on every invocation, not a per-project `CLAUDE.md` edit — works automatically in any configured project, including resumed sessions |
+| 40 | Outbox scope | Only the top level of `whatsapp-outbox/` itself is ever scanned/sent — nothing else Claude Code creates elsewhere in the project is touched |
+| 41 | Sent-file handling | Moved into `whatsapp-outbox/sent/` (kept, gitignored), not deleted — durable "already sent" tracking with no separate state file, and no loss if a send silently fails |
+| 42 | Outbox gitignore handling | Automatic, but only for projects that are already git repos — one less manual step without ever surprising a non-git folder with a new file |
+| 43 | Outbox file type/size limits | Any file type (not PDF-only), capped at 64MB with a clear rejection reply above the cap — no type allow-list to maintain, but no unbounded/silent large-file attempts either |
+| 44 | Outbox document caption | Filename shown as the WhatsApp caption, not sent bare |
+| 45 | Reply/quote scope | Text and attachments/voice notes, in either direction — not restricted to only the owner's own earlier messages |
+| 46 | Quoted-media handling | Re-downloaded fresh at reply-time (one-shot, via the same media-download call as a normal attachment) rather than resolved through a persisted message-id→file-path index — keeps quoting stateless, with nothing to fall out of sync across a restart. Quoted voice notes are handled the same way, with no separate re-transcription step |
+| 47 | Content-hash filenames | Both `whatsapp-inbox/` and `whatsapp-outbox/sent/` suffix filenames with the first 8 hex chars of the file's sha256 — prevents same-named files (e.g. a regenerated report, or a file referenced by more than one reply over time) from silently overwriting one another |
+| 48 | Project discovery model | `project_root` itself is the source of truth, live-scanned on every call — not a persisted registry that has to be kept in sync with it |
+| 49 | Numbered project switching | `/project <name-or-number>` accepts either, resolved against a fresh `/projects`-style scan each time — not a separate command, not a stable/persisted numbering scheme |
+| 50 | Project adoption scope | First switch to a `project_root` folder adopts it in-memory only for that process's lifetime (session continuity preserved) — nothing persisted to disk, since `project_root` itself is already the durable record |
+| 51 | Discovery dedup key | By resolved path, not just by name — a static `config.yaml` project can have a name that doesn't match its own folder's basename, so path-based dedup prevents the same directory from ever appearing under two different names, which would otherwise let two independent sessions run against one directory at once |

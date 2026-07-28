@@ -177,8 +177,8 @@ async function handleMessage(
   );
   // WhatsApp's newer identity system addresses a self-chat message under
   // either the phone-number JID or the LID JID depending on the client that
-  // sent it — accept both (confirmed live: phone-sent self-chat messages
-  // arrive as `${lid}@lid`, not the `@s.whatsapp.net` address).
+  // sent it — the phone app addresses it via LID, Desktop/Web via the
+  // phone-number JID — so accept either.
   const isSelfChat = Boolean(me.pn) && (remoteJid === me.pn || remoteJid === me.lid);
   if (!isSelfChat) return; // not the self-chat: ignore entirely
 
