@@ -160,6 +160,16 @@ class Dispatcher:
             known_paths.add(path.resolve())
         return dict(sorted(combined.items()))
 
+    def _format_project_line(self, name: str, path: Path) -> str:
+        """Just the name for anything under project_root — the path is
+        redundant once every project shares that root (SPEC.md §7.2). A
+        static config.yaml entry pointing outside project_root still shows
+        its path, since there's no shared root to omit it against."""
+        root = self._config.project_root
+        if root is not None and path.resolve().is_relative_to(root.resolve()):
+            return name
+        return f"{name}: {path}"
+
     def _resolve_project_name(self, arg: str) -> str | None:
         """Resolve /project's argument — a name or a 1-based /projects list
         number — to a known project name, lazily adopting a project_root
@@ -262,7 +272,8 @@ class Dispatcher:
         if command.name == "projects":
             all_projects = self._all_known_projects()
             lines = [
-                f"{i}. {name}: {path}" for i, (name, path) in enumerate(all_projects.items(), start=1)
+                f"{i}. {self._format_project_line(name, path)}"
+                for i, (name, path) in enumerate(all_projects.items(), start=1)
             ]
             marker = f"\n\nActive: {self._active_project}"
             await self._reply("Available projects:\n" + "\n".join(lines) + marker, message)

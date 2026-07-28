@@ -136,7 +136,9 @@ In your "Message Yourself" WhatsApp chat:
   number from `/projects`. Any folder under `project_root` works
   immediately, with no separate registration step (SPEC.md §7.2).
 - `/projects` — list every available project (config.yaml plus every
-  `project_root` folder), numbered.
+  `project_root` folder), numbered. Shows just the name for anything under
+  `project_root` — a `config.yaml` project whose path falls outside it still
+  shows its full path.
 - `/create <name>` — create a new project folder under `project_root` and
   switch to it (only if `project_root` is configured; flat names only, no
   slashes — SPEC.md §7.2).
