@@ -231,8 +231,8 @@ All commands are plain text messages in the self-chat, starting with `/`.
 
 | Command | Effect |
 |---|---|
-| `/project <name>` | Switch the active project for this conversation to `<name>` (must exist in configured project list). |
-| `/projects` | List configured project names and their paths. |
+| `/project <name-or-number>` | Switch the active project — any `config.yaml` project, or any folder under `project_root` — by name or by its `/projects` list number. See §7.2. |
+| `/projects` | List every available project (config.yaml plus every `project_root` folder), numbered. |
 | `/create <name>` | Create a new project folder under `project_root` and switch to it — see §7.2. |
 | `/new` | Reset the active project's Claude Code session — the next prompt starts a fresh conversation instead of continuing. |
 | `/stop` | Cancel the currently running task for the active project, if any. |
@@ -256,17 +256,14 @@ The owner's everyday personal WhatsApp number is used for this integration, and 
 - `/disable` does not cancel a task already running (`/stop` still does that separately); it only gates *new* prompts from being dispatched.
 - The toggle state persists across orchestrator restarts (a small local JSON state file, independent of `config.yaml`), so a deliberate `/disable` survives a crash/reboot/service update instead of silently reverting.
 
-### 7.2 Dynamic project creation (`/create`)
+### 7.2 Project discovery (`project_root`) and dynamic creation (`/create`)
 
-Claude Code's working-directory confinement to a pre-configured project list (§9) is the only safety boundary once permissions are auto-approved, so letting a WhatsApp message target an arbitrary filesystem path was explicitly rejected (§7 Q4 of the original design interview). `/create` reopens *just enough* of that to be useful without reintroducing an open-ended path:
+Claude Code's working-directory confinement to a pre-configured project list (§9) is the only safety boundary once permissions are auto-approved, so letting a WhatsApp message target an arbitrary filesystem path was explicitly rejected (§7 Q4 of the original design interview). `project_root` is the one deliberate, bounded exception — the entire subtree the owner already trusts enough to let Claude Code run against, so *nothing under it* needs a separate registration step to become switchable:
 
-- **Bounded to one configured root.** `project_root` in `config.yaml` is the only parent directory `/create` may ever create folders under. If unset, `/create` is disabled entirely (replies with a config-not-set error).
-- **Flat names only.** `<name>` must match `^[A-Za-z0-9_-]{1,100}$` — no slashes, no `..`, no nested paths. This makes path-traversal structurally impossible rather than relying on normalization logic to catch it.
-- **One combined action.** `/create <name>` creates `<project_root>/<name>`, registers it, and switches the active project to it in one step.
-- **Fails safe on collision, in both directions:**
-  - `<name>` already a registered project → rejected, points to `/project <name>` instead.
-  - A folder named `<name>` already exists under `project_root` but isn't registered → rejected outright, **not** silently adopted — an unregistered pre-existing folder could contain content the owner never intended to expose to a `--dangerously-skip-permissions` Claude Code session.
-- **Persisted separately from `config.yaml`.** New projects are recorded in their own local JSON state file (same pattern as §7.1's toggle state) and merged with `config.yaml`'s static project list at orchestrator startup. `config.yaml` itself is never programmatically rewritten, so hand-written comments/formatting are never at risk. A dynamic project whose folder is later deleted out-of-band is silently skipped on the next startup (logged, not an error) rather than crashing the orchestrator.
+- **Every immediate, non-hidden subfolder of `project_root` is automatically an available project** — discovered live (re-scanned on every `/project`/`/projects` call, not cached), merged with `config.yaml`'s static project list and deduplicated both by name (a static entry always wins a name collision) *and* by resolved path (confirmed live: a static entry named e.g. `wasap-grill-me` pointing at a folder literally called `wasap_grill_me` must not also appear a second time under that basename — same directory, two names, would otherwise become two independent sessions racing against one `cwd`). If `project_root` is unset, only the static list is available, matching pre-`project_root` behavior.
+- **No registration step, no persisted project list.** Switching to a project_root folder for the first time (§7.2 below) or `/create`-ing one simply adds it to the orchestrator's in-memory project registry for the rest of that process's lifetime (session continuity — the active Claude Code session id — included); nothing is written to disk beyond the folder itself. An earlier design (§12 decision #25) persisted a separate dynamic-projects state file; that was deliberately replaced (§12 decision #51) once `project_root` itself became the source of truth — one less thing that can drift out of sync with the filesystem.
+- **`/project <name-or-number>`** accepts either a project name or its number from the current `/projects` listing. Numbers reflect a fresh scan each time, sorted alphabetically for a predictable (if not permanently stable) order — list, then act on it promptly.
+- **`/create <name>`** still exists for the one thing discovery alone can't do: making a *new* empty folder. `<name>` must match `^[A-Za-z0-9_-]{1,100}$` — no slashes, no `..`, no nested paths, making path-traversal structurally impossible rather than relying on normalization logic to catch it. It's otherwise just `mkdir` + switch — no separate registration, since the folder is automatically a project the instant it exists. Fails safe on collision (name already available, from either source) rather than silently adopting or overwriting.
 
 ### 7.3 Escaping to Claude Code's own commands/skills (`/c`)
 
@@ -357,7 +354,7 @@ bridge:
 
 ## 9. Security Considerations
 
-- **Blast radius containment:** Claude Code always runs with permissions auto-approved, so the *only* safety boundary is the working-directory confinement to configured project paths. The implementation must guarantee the `claude` process is never launched with a working directory outside the configured project list, and should not blindly trust paths embedded in message text for anything other than the attachment-inbox convention in §5.3. `/create` (§7.2) is the one deliberate, narrow exception to "the project list is static" — it can only ever add folders under one pre-configured `project_root`, with a flat, regex-validated name, so the boundary itself never moves.
+- **Blast radius containment:** Claude Code always runs with permissions auto-approved, so the *only* safety boundary is the working-directory confinement to configured project paths. The implementation must guarantee the `claude` process is never launched with a working directory outside the configured project list, and should not blindly trust paths embedded in message text for anything other than the attachment-inbox convention in §5.3. `project_root` (§7.2) is the one deliberate, bounded exception to "the project list is static" — both `/create` and switching to an already-existing folder are confined to that one pre-configured directory (flat, regex-validated names only for `/create`), so the boundary itself never moves; it just means the owner is trusting the *entire* `project_root` subtree up front, not each folder individually as it's first used.
 - **Self-chat scoping is the primary access control.** Only the account owner can write to their own "Message Yourself" thread, which is why this is a stronger boundary than sender-ID filtering alone. `message.key.fromMe` (§4.1) is retained as defense-in-depth in case of a future Baileys/WhatsApp behavior change around that chat.
 - **No inbound network exposure.** Redis is loopback-only; the bridge makes only outbound connections to WhatsApp's servers. There is no listening port reachable from outside the machine.
 - **Local secrets:** Baileys' auth/session directory contains credentials equivalent to a logged-in WhatsApp Web session — treat it like a credential store (filesystem permissions restricted to the owning user, excluded from any backups that leave the machine unencrypted).
@@ -413,7 +410,7 @@ bridge:
 | 22 | Toggle persistence | Persisted to disk, survives restarts; fresh install defaults to enabled |
 | 23 | Dynamic project scope | Bounded to one configured `project_root`, not an arbitrary path |
 | 24 | `/create` UX | One combined command (create + switch), not two steps |
-| 25 | Dynamic project persistence | Own state file, `config.yaml` never programmatically rewritten |
+| 25 | Dynamic project persistence | Own state file, `config.yaml` never programmatically rewritten — **superseded by decision #51**: replaced with live `project_root` discovery, no persisted file at all |
 | 26 | Dynamic project naming | Flat names only, regex-validated — no nested paths |
 | 27 | `/create` collision handling | Reject both directions (registered name, or unregistered existing folder) — never silently adopt |
 | 28 | `/create` naming | `/create`, not `/newproject` — avoids clashing with `/new` and `/project` |
@@ -438,3 +435,7 @@ bridge:
 | 47 | Quoted-media handling | Re-download fresh at reply-time (one-shot, via the same media-download call as a normal attachment), not a persisted message-id→file-path tracking system — explicitly rejected as more complexity than warranted for this project right now |
 | 48 | Quoted-media scope narrowing | Considered re-download for every quoted type; landed on re-download for attachments/voice (worth the file being genuinely available to Claude Code) but no separate re-transcription step beyond what downloading + the normal voice flow already provides |
 | 49 | Content-hash filenames | Both `whatsapp-inbox/` and `whatsapp-outbox/sent/` suffix filenames with the first 8 hex chars of the file's sha256 — prevents same-named files (e.g. a regenerated report, or a file referenced by more than one reply over time) from silently overwriting one another |
+| 51 | Project discovery model | `project_root` itself is the source of truth (live-scanned every call) — not a persisted registry kept in sync with it; replaces decision #25's dynamic-projects state file entirely, for both `/create` and switching to a pre-existing folder |
+| 52 | Numbered project switching | `/project <name-or-number>` accepts either, resolved against a fresh `/projects`-style scan each time — not a separate command, not a stable/persisted numbering scheme |
+| 53 | Project adoption scope | First switch to a project_root folder adopts it in-memory only (session continuity preserved for that process's lifetime) — nothing persisted to disk, since decision #51 already makes the folder itself the durable record |
+| 54 | Discovery dedup key | By resolved path, not just by name — caught live: a static `config.yaml` project whose name doesn't match its own folder's basename (`wasap-grill-me` → `wasap_grill_me`) was appearing twice, which would have let two independent sessions run against the same directory at once |

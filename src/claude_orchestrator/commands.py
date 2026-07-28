@@ -6,8 +6,9 @@ from dataclasses import dataclass
 
 HELP_TEXT = (
     "Available commands:\n"
-    "/project <name> — switch the active project\n"
-    "/projects — list configured projects\n"
+    "/project <name-or-number> — switch the active project\n"
+    "/projects — list every available project (config.yaml plus every "
+    "folder under project_root), numbered\n"
     "/create <name> — create a new project folder and switch to it\n"
     "/new — start a fresh session for the active project\n"
     "/stop — cancel the task currently running for the active project\n"

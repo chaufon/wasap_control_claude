@@ -60,9 +60,11 @@ Edit `~/.config/claude-orchestrator/config.yaml`:
   (see below); copy the `pn` value in and restart.
 - `projects` — list of `{name, path}` pairs Claude Code is allowed to run
   against (SPEC.md §3, §4.4). Add every project you want reachable.
-- `project_root` — optional. Parent directory `/create <name>` is allowed
-  to make new project folders under (SPEC.md §7.2). Leave unset to disable
-  `/create` entirely.
+- `project_root` — optional. Every immediate, non-hidden folder under here
+  becomes an available project automatically — no registration needed, just
+  `/project <name>` — and it's also the only place `/create <name>` is
+  allowed to make new project folders (SPEC.md §7.2). Leave unset to only
+  use the static `projects` list above and disable `/create`.
 - `tts.voices` — maps a detected reply language to a Piper voice id
   (defaults: `en_US-ljspeech-high`, `es_AR-daniela-high`). Only used once you
   send `/voice on` (SPEC.md §7.4); any other detected language falls back to
@@ -130,8 +132,11 @@ In your "Message Yourself" WhatsApp chat:
   without a stray note accidentally becoming a command (SPEC.md §7.1).
   Disabled messages are simply left alone; your own WhatsApp history is
   the backup, nothing is copied elsewhere.
-- `/project <name>` — switch active project.
-- `/projects` — list configured projects.
+- `/project <name-or-number>` — switch active project, by name or by its
+  number from `/projects`. Any folder under `project_root` works
+  immediately, with no separate registration step (SPEC.md §7.2).
+- `/projects` — list every available project (config.yaml plus every
+  `project_root` folder), numbered.
 - `/create <name>` — create a new project folder under `project_root` and
   switch to it (only if `project_root` is configured; flat names only, no
   slashes — SPEC.md §7.2).

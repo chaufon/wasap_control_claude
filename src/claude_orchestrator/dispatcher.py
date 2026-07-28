@@ -21,14 +21,7 @@ from .formatting import format_response
 from .models import IncomingMessage, OutgoingMessage
 from .outbox import MAX_FILE_SIZE_BYTES, collect_outgoing_files, content_hash8
 from .redis_client import RedisBus
-from .state import (
-    DynamicProjectEntry,
-    ToggleState,
-    add_dynamic_project,
-    load_dynamic_projects,
-    load_state,
-    save_state,
-)
+from .state import ToggleState, load_state, save_state
 from .transcription import Transcriber
 from .tts import Synthesizer
 
@@ -127,32 +120,71 @@ class Dispatcher:
         self._projects: dict[str, ProjectState] = {
             p.name: ProjectState(config=p) for p in config.projects
         }
-        self._merge_dynamic_projects()
         self._active_project = config.default_project.name
         self._toggle: ToggleState = load_state()
 
-    def _merge_dynamic_projects(self) -> None:
-        """Fold in projects created via /create (SPEC.md §7.2), skipping any
-        whose folder has since been removed or that collide with a
-        statically-configured project name."""
-        for entry in load_dynamic_projects():
-            if entry.name in self._projects:
-                logger.warning(
-                    "dynamic project '%s' collides with a configured project; ignoring",
-                    entry.name,
-                )
+    def _scan_project_root(self) -> dict[str, Path]:
+        """Live view of project_root's immediate, non-hidden subfolders
+        (SPEC.md §7.2) — every one of them is automatically an available
+        project, no registration step required. Re-scanned on every call
+        rather than cached, so a folder created outside the bot (or by
+        /create) shows up immediately without an orchestrator restart."""
+        root = self._config.project_root
+        if root is None or not root.is_dir():
+            return {}
+        return {
+            entry.name: entry
+            for entry in sorted(root.iterdir())
+            if entry.is_dir() and not entry.name.startswith(".")
+        }
+
+    def _all_known_projects(self) -> dict[str, Path]:
+        """Every available project name -> path: config.yaml's static list
+        plus every project_root subfolder, deduplicated by name (a static
+        entry always wins) *and* by resolved path — a project_root folder
+        whose basename differs from a project already known by that same
+        path (e.g. a static entry named "wasap-grill-me" pointing at a
+        folder literally called wasap_grill_me) must not appear a second
+        time under its own basename, or the two names would end up as two
+        independent ProjectState entries pointed at one directory — each
+        with its own "busy" check, risking two `claude` processes racing
+        against the same cwd. Sorted for a stable /projects numbering."""
+        combined: dict[str, Path] = {
+            name: state.config.path for name, state in self._projects.items()
+        }
+        known_paths = {path.resolve() for path in combined.values()}
+        for name, path in self._scan_project_root().items():
+            if name in combined or path.resolve() in known_paths:
                 continue
-            path = Path(entry.path)
-            if not path.is_dir():
-                logger.warning(
-                    "dynamic project '%s' path no longer exists; skipping: %s",
-                    entry.name,
-                    path,
-                )
-                continue
-            self._projects[entry.name] = ProjectState(
-                config=ProjectConfig(name=entry.name, path=path)
+            combined[name] = path
+            known_paths.add(path.resolve())
+        return dict(sorted(combined.items()))
+
+    def _resolve_project_name(self, arg: str) -> str | None:
+        """Resolve /project's argument — a name or a 1-based /projects list
+        number — to a known project name, lazily adopting a project_root
+        folder that hasn't been switched to yet this run (SPEC.md §7.2).
+        Once adopted it behaves exactly like any statically-configured
+        project — session continuity included — for the rest of this
+        process's lifetime; nothing is persisted to disk, so an untouched
+        folder is simply rediscovered live next time (§12 decision #51)."""
+        all_projects = self._all_known_projects()
+        if arg.isdigit():
+            names = list(all_projects)
+            index = int(arg) - 1
+            if not (0 <= index < len(names)):
+                return None
+            name = names[index]
+        elif arg in all_projects:
+            name = arg
+        else:
+            return None
+
+        if name not in self._projects:
+            self._projects[name] = ProjectState(
+                config=ProjectConfig(name=name, path=all_projects[name])
             )
+        return name
 
     async def run(self) -> None:
         async for message in self._bus.incoming_messages():
@@ -215,22 +247,25 @@ class Dispatcher:
     async def _handle_command(self, command: Command, message: IncomingMessage) -> None:
         if command.name == "project":
             if not command.arg:
-                await self._reply("Usage: /project <name>", message)
+                await self._reply("Usage: /project <name-or-number>", message)
                 return
-            if command.arg not in self._projects:
-                names = ", ".join(self._projects)
+            name = self._resolve_project_name(command.arg)
+            if name is None:
                 await self._reply(
-                    f"❌ Unknown project '{command.arg}'. Known projects: {names}", message
+                    f"❌ Unknown project '{command.arg}'. Send /projects for the list.", message
                 )
                 return
-            self._active_project = command.arg
-            await self._reply(f"✅ Switched to project '{command.arg}'.", message)
+            self._active_project = name
+            await self._reply(f"✅ Switched to project '{name}'.", message)
             return
 
         if command.name == "projects":
-            lines = [f"• {p.config.name}: {p.config.path}" for p in self._projects.values()]
+            all_projects = self._all_known_projects()
+            lines = [
+                f"{i}. {name}: {path}" for i, (name, path) in enumerate(all_projects.items(), start=1)
+            ]
             marker = f"\n\nActive: {self._active_project}"
-            await self._reply("Configured projects:\n" + "\n".join(lines) + marker, message)
+            await self._reply("Available projects:\n" + "\n".join(lines) + marker, message)
             return
 
         if command.name == "create":
@@ -336,26 +371,16 @@ class Dispatcher:
             )
             return
 
-        if name in self._projects:
-            await self._reply(
-                f"❌ Project '{name}' already exists. Use /project {name} to switch to it.",
-                message,
-            )
-            return
-
         path = self._config.project_root / name
-        if path.exists():
+        if name in self._all_known_projects() or path.exists():
             await self._reply(
-                f"❌ A folder named '{name}' already exists under "
-                f"{self._config.project_root} but isn't a registered project. "
-                "Pick a different name.",
+                f"❌ '{name}' already exists. Use /project {name} to switch to it.",
                 message,
             )
             return
 
         path.mkdir(parents=True)
         self._projects[name] = ProjectState(config=ProjectConfig(name=name, path=path))
-        add_dynamic_project(DynamicProjectEntry(name=name, path=str(path)))
         self._active_project = name
         await self._reply(f"✅ Created and switched to project '{name}' ({path}).", message)
 
