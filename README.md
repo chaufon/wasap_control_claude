@@ -112,6 +112,15 @@ logout by design (SPEC.md §9/§10) — do **not** run
 `loginctl enable-linger`, since the intent is to tie service lifetime to an
 active login session.
 
+If the bridge can't reconnect to WhatsApp after 10 attempts (~25 minutes of
+exponential backoff, capped at 5 minutes per attempt — SPEC.md §4.1), it
+exits cleanly and stays stopped rather than continuing to retry:
+
+```bash
+systemctl --user status whatsapp-bridge.service   # inactive (dead)
+systemctl --user start whatsapp-bridge.service    # once the issue clears
+```
+
 Logs:
 
 ```bash

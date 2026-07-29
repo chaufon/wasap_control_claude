@@ -11,6 +11,7 @@ import { Boom } from '@hapi/boom';
 import makeWASocket, {
   DisconnectReason,
   downloadMediaMessage,
+  fetchLatestBaileysVersion,
   getContentType,
   jidNormalizedUser,
   useMultiFileAuthState,
@@ -25,6 +26,45 @@ import { RedisBus, type IncomingEvent } from './redis.js';
 const logger = pino({ level: process.env.LOG_LEVEL ?? 'info' });
 
 const MAX_MESSAGE_LENGTH = 4000;
+
+const RECONNECT_INITIAL_DELAY_MS = 5_000;
+const RECONNECT_MAX_DELAY_MS = 5 * 60_000;
+const RECONNECT_STABLE_AFTER_MS = 60_000;
+const RECONNECT_MAX_ATTEMPTS = 10;
+
+// Exponential backoff for reconnect attempts (5s, 10s, 20s, ... capped at
+// RECONNECT_MAX_DELAY_MS), so a rejected reconnect doesn't get hammered at a
+// fixed rate. A connection has to stay open for RECONNECT_STABLE_AFTER_MS to
+// count as recovered and reset the attempt count — a flap that closes again
+// sooner doesn't reset it, since that's the exact pattern a strict fixed
+// delay would otherwise hammer. Giving up after RECONNECT_MAX_ATTEMPTS stops
+// that hammering for good rather than letting it degrade into a slower
+// version of the same loop.
+class ReconnectBackoff {
+  private attempts = 0;
+  private stableTimer: NodeJS.Timeout | undefined;
+
+  /** Delay for the next reconnect attempt, or undefined once given up. */
+  nextDelayMs(): number | undefined {
+    this.attempts += 1;
+    if (this.attempts > RECONNECT_MAX_ATTEMPTS) return undefined;
+    return Math.min(
+      RECONNECT_INITIAL_DELAY_MS * 2 ** (this.attempts - 1),
+      RECONNECT_MAX_DELAY_MS,
+    );
+  }
+
+  onConnectionOpen(): void {
+    clearTimeout(this.stableTimer);
+    this.stableTimer = setTimeout(() => {
+      this.attempts = 0;
+    }, RECONNECT_STABLE_AFTER_MS);
+  }
+
+  onConnectionClosed(): void {
+    clearTimeout(this.stableTimer);
+  }
+}
 
 function splitText(text: string, maxLength = MAX_MESSAGE_LENGTH): string[] {
   if (text.length <= maxLength) return [text];
@@ -280,12 +320,14 @@ export async function startBridge(config: BridgeConfig, bus: RedisBus): Promise<
   await mkdir(config.outgoingStagingDir, { recursive: true });
 
   const { state, saveCreds } = await useMultiFileAuthState(config.authDir);
+  const { version } = await fetchLatestBaileysVersion();
 
   let socket: WASocket;
   let me: OwnIdentity = { pn: '', lid: '' };
+  const reconnectBackoff = new ReconnectBackoff();
 
   const connect = (): void => {
-    socket = makeWASocket({ auth: state, logger });
+    socket = makeWASocket({ auth: state, logger, version });
 
     socket.ev.on('creds.update', saveCreds);
 
@@ -303,15 +345,26 @@ export async function startBridge(config: BridgeConfig, bus: RedisBus): Promise<
           lid: socket.user?.lid ? jidNormalizedUser(socket.user.lid) : '',
         };
         logger.info({ me }, 'connected to WhatsApp');
+        reconnectBackoff.onConnectionOpen();
       } else if (connection === 'close') {
+        reconnectBackoff.onConnectionClosed();
         const statusCode = (lastDisconnect?.error as Boom | undefined)?.output?.statusCode;
         const shouldReconnect = statusCode !== DisconnectReason.loggedOut;
         logger.warn({ statusCode, shouldReconnect }, 'connection closed');
-        if (shouldReconnect) {
-          setTimeout(connect, 5000);
-        } else {
+        if (!shouldReconnect) {
           logger.error('logged out — delete the auth directory and re-pair to continue');
+          return;
         }
+        const delayMs = reconnectBackoff.nextDelayMs();
+        if (delayMs === undefined) {
+          logger.error(
+            `giving up after ${RECONNECT_MAX_ATTEMPTS} failed reconnect attempts without a stable ` +
+              'connection; run `systemctl --user start whatsapp-bridge.service` once the issue clears',
+          );
+          process.exit(0);
+        }
+        logger.warn({ delayMs }, 'reconnecting');
+        setTimeout(connect, delayMs);
       }
     });
 
