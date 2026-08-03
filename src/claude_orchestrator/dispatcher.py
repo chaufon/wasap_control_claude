@@ -21,7 +21,7 @@ from .formatting import format_response
 from .models import IncomingMessage, OutgoingMessage
 from .outbox import MAX_FILE_SIZE_BYTES, collect_outgoing_files, content_hash8
 from .redis_client import RedisBus
-from .state import ToggleState, load_state, save_state
+from .state import PersistedState, load_state, save_state
 from .transcription import Transcriber
 from .tts import Synthesizer
 
@@ -120,8 +120,38 @@ class Dispatcher:
         self._projects: dict[str, ProjectState] = {
             p.name: ProjectState(config=p) for p in config.projects
         }
-        self._active_project = config.default_project.name
-        self._toggle: ToggleState = load_state()
+        self._state: PersistedState = load_state()
+        self._active_project = self._restore_active_project()
+
+    def _adopt_project(self, name: str, path: Path) -> None:
+        """Register a project_root-discovered folder the first time it's
+        switched to this run (SPEC.md §7.2) — a no-op for names already
+        known, whether static or previously adopted."""
+        if name not in self._projects:
+            self._projects[name] = ProjectState(config=ProjectConfig(name=name, path=path))
+
+    def _restore_active_project(self) -> str:
+        """The active project persists across restarts (state.json); fall
+        back to config.default_project if the persisted name no longer
+        resolves (e.g. removed from config.yaml or its project_root folder
+        deleted)."""
+        persisted = self._state.active_project
+        if persisted is not None:
+            all_projects = self._all_known_projects()
+            if persisted in all_projects:
+                self._adopt_project(persisted, all_projects[persisted])
+                return persisted
+            logger.warning(
+                "persisted active project %r no longer exists; falling back to %r",
+                persisted,
+                self._config.default_project.name,
+            )
+        return self._config.default_project.name
+
+    def _set_active_project(self, name: str) -> None:
+        self._active_project = name
+        self._state.active_project = name
+        save_state(self._state)
 
     def _scan_project_root(self) -> dict[str, Path]:
         """Live view of project_root's immediate, non-hidden subfolders
@@ -190,10 +220,7 @@ class Dispatcher:
         else:
             return None
 
-        if name not in self._projects:
-            self._projects[name] = ProjectState(
-                config=ProjectConfig(name=name, path=all_projects[name])
-            )
+        self._adopt_project(name, all_projects[name])
         return name
 
     async def run(self) -> None:
@@ -222,14 +249,14 @@ class Dispatcher:
                 # otherwise there'd be no way to turn Claude back on.
                 await self._handle_command(command, message)
                 return
-            if not self._toggle.claude_enabled:
+            if not self._state.claude_enabled:
                 return  # personal note/backup content: leave it alone (SPEC.md §7.1)
             prefix = await self._build_reply_context(message)
             await self._handle_prompt(prefix + text, message)
             return
 
         if message.type == "voice":
-            if not self._toggle.claude_enabled:
+            if not self._state.claude_enabled:
                 return  # skip transcription entirely — nothing to do with it while disabled
             if not message.media_path:
                 await self._reply("❌ Voice message had no audio attached.", message)
@@ -244,7 +271,7 @@ class Dispatcher:
             return
 
         if message.type == "attachment":
-            if not self._toggle.claude_enabled:
+            if not self._state.claude_enabled:
                 return  # skip staging entirely — nothing to do with it while disabled
             if not message.media_path:
                 await self._reply("❌ Attachment message had no file.", message)
@@ -265,7 +292,7 @@ class Dispatcher:
                     f"❌ Unknown project '{command.arg}'. Send /projects for the list.", message
                 )
                 return
-            self._active_project = name
+            self._set_active_project(name)
             await self._reply(f"✅ Switched to project '{name}'.", message)
             return
 
@@ -300,14 +327,14 @@ class Dispatcher:
             return
 
         if command.name == "enable":
-            self._toggle.claude_enabled = True
-            save_state(self._toggle)
+            self._state.claude_enabled = True
+            save_state(self._state)
             await self._reply("🟢 Claude Code enabled.", message)
             return
 
         if command.name == "disable":
-            self._toggle.claude_enabled = False
-            save_state(self._toggle)
+            self._state.claude_enabled = False
+            save_state(self._state)
             await self._reply(
                 "🔴 Claude Code disabled. Messages won't be sent to Claude Code until /enable.",
                 message,
@@ -318,16 +345,16 @@ class Dispatcher:
             if command.arg not in ("on", "off"):
                 await self._reply("Usage: /voice on | off", message)
                 return
-            self._toggle.voice_enabled = command.arg == "on"
-            save_state(self._toggle)
-            label = "🔊 on" if self._toggle.voice_enabled else "🔇 off"
+            self._state.voice_enabled = command.arg == "on"
+            save_state(self._state)
+            label = "🔊 on" if self._state.voice_enabled else "🔇 off"
             await self._reply(f"Voice replies: {label}", message)
             return
 
         if command.name == "status":
             state = self._projects[self._active_project]
-            toggle_label = "🟢 enabled" if self._toggle.claude_enabled else "🔴 disabled"
-            voice_label = "🔊 on" if self._toggle.voice_enabled else "🔇 off"
+            toggle_label = "🟢 enabled" if self._state.claude_enabled else "🔴 disabled"
+            voice_label = "🔊 on" if self._state.voice_enabled else "🔇 off"
             busy_label = "busy" if state.invocation is not None else "idle"
             await self._reply(
                 f"{toggle_label}\nvoice replies: {voice_label}\n"
@@ -345,7 +372,7 @@ class Dispatcher:
             # /usage"), which would otherwise be swallowed by the command table
             # above. Content bound for Claude, so it honors the toggle like any
             # other prompt — unlike the meta-commands above (SPEC.md §7.3).
-            if not self._toggle.claude_enabled:
+            if not self._state.claude_enabled:
                 await self._reply(_DISABLED_NOTICE, message)
                 return
             if not command.arg:
@@ -355,7 +382,7 @@ class Dispatcher:
             await self._handle_prompt(prefix + command.arg, message)
             return
 
-        if not self._toggle.claude_enabled:
+        if not self._state.claude_enabled:
             await self._reply(_DISABLED_NOTICE, message)
             return
 
@@ -392,7 +419,7 @@ class Dispatcher:
 
         path.mkdir(parents=True)
         self._projects[name] = ProjectState(config=ProjectConfig(name=name, path=path))
-        self._active_project = name
+        self._set_active_project(name)
         await self._reply(f"✅ Created and switched to project '{name}' ({path}).", message)
 
     async def _handle_prompt(self, prompt: str, message: IncomingMessage) -> None:
@@ -450,7 +477,7 @@ class Dispatcher:
         for chunk in format_response(result.text):
             await self._reply(chunk, message)
 
-        if self._toggle.voice_enabled and result.text.strip():
+        if self._state.voice_enabled and result.text.strip():
             await self._reply_voice(result.text, message)
 
         await self._send_outbox_files(state.config.path, message)
