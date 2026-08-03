@@ -29,7 +29,12 @@ projects:
 project_root: /home/centos/PycharmProjects
 
 claude_code:
-  binary: claude
+  # Must be an absolute path: systemd --user units don't reliably inherit
+  # a PATH containing ~/.local/bin (it depends on when the user manager's
+  # environment gets updated relative to service start), so a bare "claude"
+  # can resolve at some boots and fail at others. `which claude` prints the
+  # current target.
+  binary: /home/centos/.local/bin/claude
   # Hard timeout per task; after this the process is killed and the
   # request is treated as a failure (SPEC.md §5.7).
   task_timeout_seconds: 900
