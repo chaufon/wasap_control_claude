@@ -112,6 +112,19 @@ logout by design (SPEC.md §9/§10) — do **not** run
 `loginctl enable-linger`, since the intent is to tie service lifetime to an
 active login session.
 
+### Reloading after changes
+
+Neither service picks up code or config edits on its own — restart both
+after pulling new code, editing `config.yaml`, or rebuilding the bridge
+(`npm run build`):
+
+```bash
+systemctl --user restart whatsapp-bridge.service claude-orchestrator.service
+```
+
+If you only changed the unit files themselves (not their `ExecStart`
+targets), run `systemctl --user daemon-reload` first.
+
 If the bridge can't reconnect to WhatsApp after 10 attempts (~25 minutes of
 exponential backoff, capped at 5 minutes per attempt — SPEC.md §4.1), it
 exits cleanly and stays stopped rather than continuing to retry:
