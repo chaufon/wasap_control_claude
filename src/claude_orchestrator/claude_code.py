@@ -76,6 +76,7 @@ class ClaudeCodeRunner:
         cwd: Path,
         prompt: str,
         resume_session_id: str | None,
+        model: str | None = None,
     ) -> ClaudeCodeInvocation:
         args = [
             self.binary,
@@ -90,6 +91,8 @@ class ClaudeCodeRunner:
         ]
         if resume_session_id:
             args += ["--resume", resume_session_id]
+        if model:
+            args += ["--model", model]
 
         process = await asyncio.create_subprocess_exec(
             *args,

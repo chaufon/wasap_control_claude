@@ -238,7 +238,7 @@ All commands are plain text messages in the self-chat, starting with `/`.
 | `/stop` | Cancel the currently running task for the active project, if any. |
 | `/enable` | Allow messages to reach Claude Code (global, all projects). |
 | `/disable` | Stop messages from reaching Claude Code (global, all projects) — see §7.1. |
-| `/status` | Report enabled/disabled state, active project, and whether it's busy or idle. |
+| `/status` | Report enabled/disabled state, active project, whether it's busy or idle, and the active project's Claude Code session ID (or "none yet"). |
 | `/c <text>` | Send `<text>` to Claude Code verbatim as the prompt, bypassing the command table above — see §7.3. |
 | `/voice on` \| `/voice off` | Also send replies as a voice note, in the reply's own detected language (off by default) — see §7.4. |
 | `/help` | List available commands. |

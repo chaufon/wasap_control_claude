@@ -167,7 +167,12 @@ In your "Message Yourself" WhatsApp chat:
 - `/new` — reset the active project's Claude Code session.
 - `/stop` — cancel the task currently running for the active project.
 - `/enable` / `/disable` — allow/stop messages from reaching Claude Code.
-- `/status` — enabled/disabled state, active project, busy/idle.
+- `/status` — enabled/disabled state, active project, busy/idle, and the
+  active project's Claude Code session ID. Handy for continuing the same
+  conversation from a terminal later: `claude --resume <session ID>` from
+  that project's directory (a `/name`'d title only resolves in `--print`
+  mode, not the interactive picker, so the ID is the reliable way to resume
+  interactively).
 - `/c <text>` — send `<text>` to Claude Code verbatim as the prompt, e.g.
   `/c /usage` or `/c /mattpocock-skills:grill-me an idea` — use this to reach
   Claude Code's own commands/skills, which would otherwise be swallowed as an

@@ -37,6 +37,13 @@ _VALID_PROJECT_NAME_RE = re.compile(r"^[A-Za-z0-9_-]{1,100}$")
 # text/voice/attachments, which stay silent (SPEC.md §7.1/§7.3).
 _DISABLED_NOTICE = "🔴 Claude Code is disabled. Send /enable first."
 
+# /new eagerly creates the replacement session right away (cheap model, inert
+# prompt) rather than waiting for the next real message, so a service restart
+# in between never silently resumes the session /new was meant to replace.
+_BOOTSTRAP_MODEL = "claude-haiku-4-5-20251001"
+_BOOTSTRAP_PROMPT = "Reply with just the word OK. Do not read or modify any files."
+_BOOTSTRAP_TIMEOUT_SECONDS = 30
+
 
 def _stage_into_inbox(source: Path, project_path: Path, timestamp: str) -> Path:
     """Move `source` into <project_path>/whatsapp-inbox/, content-hash-suffixed
@@ -121,6 +128,8 @@ class Dispatcher:
             p.name: ProjectState(config=p) for p in config.projects
         }
         self._state: PersistedState = load_state()
+        for project_name, project_state in self._projects.items():
+            project_state.session_id = self._state.session_ids.get(project_name)
         self._active_project = self._restore_active_project()
 
     def _adopt_project(self, name: str, path: Path) -> None:
@@ -128,7 +137,10 @@ class Dispatcher:
         switched to this run (SPEC.md §7.2) — a no-op for names already
         known, whether static or previously adopted."""
         if name not in self._projects:
-            self._projects[name] = ProjectState(config=ProjectConfig(name=name, path=path))
+            self._projects[name] = ProjectState(
+                config=ProjectConfig(name=name, path=path),
+                session_id=self._state.session_ids.get(name),
+            )
 
     def _restore_active_project(self) -> str:
         """The active project persists across restarts (state.json); fall
@@ -152,6 +164,37 @@ class Dispatcher:
         self._active_project = name
         self._state.active_project = name
         save_state(self._state)
+
+    def _remember_session(self, name: str, session_id: str) -> None:
+        self._projects[name].session_id = session_id
+        self._state.session_ids[name] = session_id
+        save_state(self._state)
+
+    async def _bootstrap_session(self, name: str) -> str | None:
+        """Eagerly create /new's replacement session (cheap model, inert
+        prompt) instead of waiting for the next real message — returns None,
+        leaving the previous session untouched, if this fails for any reason."""
+        try:
+            invocation = await self._runner.start(
+                cwd=self._projects[name].config.path,
+                prompt=_BOOTSTRAP_PROMPT,
+                resume_session_id=None,
+                model=_BOOTSTRAP_MODEL,
+            )
+            result = await consume(
+                invocation,
+                on_tool_call=None,
+                timeout_seconds=_BOOTSTRAP_TIMEOUT_SECONDS,
+            )
+        except Exception:
+            logger.exception("failed to bootstrap a new session for %r", name)
+            return None
+        if result.is_error or not result.session_id:
+            logger.warning(
+                "bootstrap session for %r came back as an error: %s", name, result.error_detail
+            )
+            return None
+        return result.session_id
 
     def _scan_project_root(self) -> dict[str, Path]:
         """Live view of project_root's immediate, non-hidden subfolders
@@ -311,9 +354,17 @@ class Dispatcher:
             return
 
         if command.name == "new":
-            state = self._projects[self._active_project]
-            state.session_id = None
-            await self._reply(f"🆕 Started a new session for '{self._active_project}'.", message)
+            name = self._active_project
+            new_session_id = await self._bootstrap_session(name)
+            if new_session_id is None:
+                await self._reply(
+                    f"❌ Couldn't start a new session for '{name}' "
+                    "(still on the previous one) — try again.",
+                    message,
+                )
+                return
+            self._remember_session(name, new_session_id)
+            await self._reply(f"🆕 Started a new session for '{name}'.", message)
             return
 
         if command.name == "stop":
@@ -356,9 +407,15 @@ class Dispatcher:
             toggle_label = "🟢 enabled" if self._state.claude_enabled else "🔴 disabled"
             voice_label = "🔊 on" if self._state.voice_enabled else "🔇 off"
             busy_label = "busy" if state.invocation is not None else "idle"
+            # Full session ID, not truncated: `claude --resume <id>` needs it
+            # verbatim to continue this conversation from a terminal (only
+            # the ID reliably resumes interactively — a /name'd title only
+            # resolves in --print mode, not the interactive picker).
+            session_label = state.session_id or "none yet"
             await self._reply(
                 f"{toggle_label}\nvoice replies: {voice_label}\n"
-                f"project: {self._active_project} ({busy_label})",
+                f"project: {self._active_project} ({busy_label})\n"
+                f"session: {session_label}",
                 message,
             )
             return
@@ -458,7 +515,7 @@ class Dispatcher:
             state.invocation = None
 
         if result.session_id:
-            state.session_id = result.session_id
+            self._remember_session(self._active_project, result.session_id)
 
         if result.cancelled:
             await self._reply("🛑 Stopped.", message)
