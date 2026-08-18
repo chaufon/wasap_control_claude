@@ -536,12 +536,14 @@ class Dispatcher:
             return
 
         text_for_reply, voice_summary = extract_voice_summary(result.text)
+        if not text_for_reply.strip():
+            text_for_reply = result.text
 
         for chunk in format_response(text_for_reply):
             await self._reply(chunk, message)
 
         if self._state.voice_enabled and result.text.strip():
-            await self._reply_voice(voice_summary or result.text, message)
+            await self._reply_voice(voice_summary or text_for_reply, message)
 
         await self._send_outbox_files(state.config.path, message)
 
