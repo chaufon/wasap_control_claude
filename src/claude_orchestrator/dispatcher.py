@@ -24,6 +24,7 @@ from .redis_client import RedisBus
 from .state import PersistedState, load_state, save_state
 from .transcription import Transcriber
 from .tts import Synthesizer
+from .voice_summary import VOICE_SUMMARY_SYSTEM_PROMPT, extract_voice_summary
 
 logger = logging.getLogger(__name__)
 
@@ -496,6 +497,9 @@ class Dispatcher:
             cwd=state.config.path,
             prompt=prompt,
             resume_session_id=state.session_id,
+            extra_system_prompt=(
+                VOICE_SUMMARY_SYSTEM_PROMPT if self._state.voice_enabled else None
+            ),
         )
         state.invocation = invocation
 
@@ -531,11 +535,13 @@ class Dispatcher:
             await self._reply(f"❌ Claude Code failed: {summary}", message)
             return
 
-        for chunk in format_response(result.text):
+        text_for_reply, voice_summary = extract_voice_summary(result.text)
+
+        for chunk in format_response(text_for_reply):
             await self._reply(chunk, message)
 
         if self._state.voice_enabled and result.text.strip():
-            await self._reply_voice(result.text, message)
+            await self._reply_voice(voice_summary or result.text, message)
 
         await self._send_outbox_files(state.config.path, message)
 
