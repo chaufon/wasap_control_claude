@@ -77,22 +77,9 @@ class ClaudeCodeRunner:
         prompt: str,
         resume_session_id: str | None,
         model: str | None = None,
+        extra_system_prompt: str | None = None,
     ) -> ClaudeCodeInvocation:
-        args = [
-            self.binary,
-            "-p",
-            prompt,
-            "--output-format",
-            "stream-json",
-            "--verbose",
-            "--dangerously-skip-permissions",
-            "--append-system-prompt",
-            OUTBOX_SYSTEM_PROMPT,
-        ]
-        if resume_session_id:
-            args += ["--resume", resume_session_id]
-        if model:
-            args += ["--model", model]
+        args = _build_args(self.binary, prompt, resume_session_id, model, extra_system_prompt)
 
         process = await asyncio.create_subprocess_exec(
             *args,
@@ -106,6 +93,35 @@ class ClaudeCodeRunner:
             stderr=asyncio.subprocess.PIPE,
         )
         return ClaudeCodeInvocation(process)
+
+
+def _build_args(
+    binary: str,
+    prompt: str,
+    resume_session_id: str | None,
+    model: str | None,
+    extra_system_prompt: str | None,
+) -> list[str]:
+    system_prompt = OUTBOX_SYSTEM_PROMPT
+    if extra_system_prompt:
+        system_prompt = f"{OUTBOX_SYSTEM_PROMPT}\n\n{extra_system_prompt}"
+
+    args = [
+        binary,
+        "-p",
+        prompt,
+        "--output-format",
+        "stream-json",
+        "--verbose",
+        "--dangerously-skip-permissions",
+        "--append-system-prompt",
+        system_prompt,
+    ]
+    if resume_session_id:
+        args += ["--resume", resume_session_id]
+    if model:
+        args += ["--model", model]
+    return args
 
 
 OnToolCall = Callable[[str], Awaitable[None]]
