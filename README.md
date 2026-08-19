@@ -189,10 +189,12 @@ In your "Message Yourself" WhatsApp chat:
   is disabled" instead of running — a leading `/` is never a personal note,
   so unlike plain text it's never silently ignored (SPEC.md §7.1/§7.3).
 - `/voice on` / `/voice off` — also send each reply as a WhatsApp voice note,
-  in addition to the text reply (off by default). The voice note's language
-  (English/Spanish, per `tts.voices` above) is detected from the reply's own
-  text each time, not fixed to one language or based on how you asked
-  (SPEC.md §7.4).
+  in addition to the text reply (off by default). The voice note speaks a
+  short (~100 word) spoken-style summary of the answer rather than reading
+  the full text reply aloud; the text reply always carries the complete
+  answer regardless. The voice note's language (English/Spanish, per
+  `tts.voices` above) is detected from the reply text each time, not fixed
+  to one language or based on how you asked (SPEC.md §7.4).
 - `/help` — show the command list.
 - Claude Code can also send **you** a file (e.g. a generated PDF report):
   it just needs to save it into `<project>/whatsapp-outbox/` — it's told
