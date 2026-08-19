@@ -31,10 +31,17 @@ def extract_voice_summary(
     heading and everything after it removed; summary is None if the heading
     wasn't found (caller falls back to speaking remaining_text as-is),
     otherwise the section after the heading, hard-truncated to word_cap
-    words."""
+    words.
+
+    The LAST line matching the heading is used, not the first: the heading
+    text can legitimately appear earlier in the reply (Claude quoting it,
+    mentioning it organically, or emitting it inside a code fence), and the
+    real heading — the one instructing where the spoken summary starts — is
+    always the one closest to the end, per VOICE_SUMMARY_SYSTEM_PROMPT's own
+    instruction that it comes after the full answer."""
     lines = text.split("\n")
-    for index, line in enumerate(lines):
-        if line.strip() == VOICE_SUMMARY_HEADING:
+    for index in range(len(lines) - 1, -1, -1):
+        if lines[index].strip() == VOICE_SUMMARY_HEADING:
             remaining = "\n".join(lines[:index]).rstrip()
             summary = "\n".join(lines[index + 1 :]).strip()
             words = summary.split()
@@ -42,3 +49,18 @@ def extract_voice_summary(
                 summary = " ".join(words[:word_cap])
             return remaining, summary
     return text, None
+
+
+def split_reply(text: str, word_cap: int = VOICE_SUMMARY_WORD_CAP) -> tuple[str, str]:
+    """Split a Claude Code response into (text_for_reply, voice_text): what
+    the text channel sends, and what gets spoken if voice replies are
+    enabled. text_for_reply never contains the audio-summary heading: when
+    there's no content before the heading, the summary itself becomes
+    text_for_reply instead of falling back to the raw (heading-including)
+    text. voice_text is the summary when one exists, otherwise it falls back
+    to text_for_reply — which is the full original text when there's no
+    heading at all."""
+    remaining, summary = extract_voice_summary(text, word_cap)
+    text_for_reply = remaining if remaining.strip() else (summary or text)
+    voice_text = summary or text_for_reply
+    return text_for_reply, voice_text
