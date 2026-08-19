@@ -12,10 +12,15 @@ sudo apt install -y redis-server ffmpeg nodejs npm
 
 - **Node.js ≥ 20** (already present on this machine).
 - **Python ≥ 3.11** with [`uv`](https://docs.astral.sh/uv/).
-- **CUDA + cuDNN** matching the installed NVIDIA driver, for GPU-accelerated
-  `faster-whisper`. `faster-whisper`/`ctranslate2` are pulled in by `uv sync`
-  below; if CUDA libraries aren't importable at runtime the transcriber
-  automatically falls back to CPU (SPEC.md §4.3).
+- **GPU-accelerated `faster-whisper`** needs CUDA/cuDNN libraries loadable at
+  runtime. `faster-whisper`/`ctranslate2`, plus the `nvidia-cublas-cu12`/
+  `nvidia-cudnn-cu12` pip wheels that provide those libraries, are all pulled
+  in by `uv sync` below — no system-wide CUDA install is required. The
+  systemd unit (`systemd/claude-orchestrator.service`) sets `LD_LIBRARY_PATH`
+  to the venv's `nvidia/cublas/lib` and `nvidia/cudnn/lib` directories so
+  those wheel-provided libraries are found at process start; if they aren't
+  importable at runtime the transcriber automatically falls back to CPU
+  (SPEC.md §4.3).
 - `ffmpeg` (already listed above) is also used to convert synthesized voice
   replies to the Opus/OGG format WhatsApp voice notes require (SPEC.md §7.4).
   `piper-tts` and `langdetect` are pulled in by `uv sync` below; voice models

@@ -364,7 +364,7 @@ bridge:
 
 ## 10. Deployment & Operations
 
-1. **Prerequisites:** Node.js (current LTS), Python (≥3.11, matching existing `pyproject.toml` scaffold), `redis-server` (via apt), `ffmpeg`, CUDA + cuDNN matching the installed NVIDIA driver (595.84 / CUDA 13.2) for GPU-accelerated `faster-whisper`.
+1. **Prerequisites:** Node.js (current LTS), Python (≥3.11, matching existing `pyproject.toml` scaffold), `redis-server` (via apt), `ffmpeg`. GPU-accelerated `faster-whisper` needs CUDA/cuDNN libraries loadable at runtime; these come from the `nvidia-cublas-cu12`/`nvidia-cudnn-cu12` pip wheels (pulled in with the rest of the Python dependencies, no system-wide CUDA install needed), with the systemd unit's `LD_LIBRARY_PATH` pointing at those wheels' `lib/` directories inside the venv so they're found at process start.
 2. **Disable automatic suspend/sleep** in Kubuntu power settings (screen lock/screensaver may remain enabled).
 3. **Pairing:** run the bridge interactively once to scan the WhatsApp QR pairing code; confirm the auth directory persists across restarts.
 4. **systemd units** (both `systemctl --user`, so they start on login and stop on logout, per §9 in the interview):
