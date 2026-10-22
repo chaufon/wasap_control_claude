@@ -231,9 +231,9 @@ All commands are plain text messages in the self-chat, starting with `/`.
 
 | Command | Effect |
 |---|---|
-| `/project <name-or-number>` | Switch the active project — any `config.yaml` project, or any folder under `project_root` — by name or by its `/projects` list number. See §7.2. |
-| `/projects` | List every available project (config.yaml plus every `project_root` folder), numbered. |
-| `/create <name>` | Create a new project folder under `project_root` and switch to it — see §7.2. |
+| `/project <name-or-number>` | Switch the active project — any `config.yaml` project, or any project folder under `project_root` or one of its `project_containers` — by name or by its `/projects` list number. Naming a container lists its projects instead. See §7.2. |
+| `/projects` | List every available project (config.yaml plus every `project_root` project folder), numbered, with each container's projects grouped under it. |
+| `/create <name>` | Create a new project folder under `project_root` (`<name>`) or under one of its containers (`<container>/<name>`) and switch to it — see §7.2. |
 | `/new` | Reset the active project's Claude Code session — the next prompt starts a fresh conversation instead of continuing. |
 | `/stop` | Cancel the currently running task for the active project, if any. |
 | `/enable` | Allow messages to reach Claude Code (global, all projects). |
@@ -260,11 +260,13 @@ The owner's everyday personal WhatsApp number is used for this integration, and 
 
 Claude Code's working-directory confinement to a pre-configured project list (§9) is the only safety boundary once permissions are auto-approved, so letting a WhatsApp message target an arbitrary filesystem path is never allowed. `project_root` is the one deliberate, bounded exception — the entire subtree the owner already trusts enough to let Claude Code run against, so *nothing under it* needs a separate registration step to become switchable:
 
-- **Every immediate, non-hidden subfolder of `project_root` is automatically an available project** — discovered live (re-scanned on every `/project`/`/projects` call, not cached), merged with `config.yaml`'s static project list and deduplicated both by name (a static entry always wins a name collision) *and* by resolved path (a static entry named e.g. `wasap-grill-me` pointing at a folder literally called `wasap_grill_me` must not also appear a second time under that basename — same directory, two names, would otherwise become two independent sessions racing against one `cwd`). If `project_root` is unset, only the static list is available.
+- **Every immediate, non-hidden subfolder of `project_root` is automatically an available project, unless it is a container** — discovered live (re-scanned on every `/project`/`/projects` call, not cached), merged with `config.yaml`'s static project list and deduplicated both by name (a static entry always wins a name collision) *and* by resolved path (a static entry named e.g. `wasap-grill-me` pointing at a folder literally called `wasap_grill_me` must not also appear a second time under that basename — same directory, two names, would otherwise become two independent sessions racing against one `cwd`). If `project_root` is unset, only the static list is available.
+- **Containers (`project_containers`) hold projects instead of being one.** `config.yaml` lists them as paths relative to `project_root` (e.g. `c`, `c/car`). A container is scanned one level deep with the same rule as `project_root`: each non-hidden subfolder is a project, unless it is itself a listed container. Nested projects are named by their path relative to `project_root` (`c/whey`, `c/car/maintenance`), so a nested folder never collides with a top-level one of the same basename. A container is only reached through `project_root` or another listed container, so depth is set by what is listed, not by a separate limit. A listed container whose folder is missing is skipped, with a warning in the service log at startup. The container list is read once, at startup. A container itself is never selectable: `/project <container>` replies with that container's projects instead of switching.
 - **No registration step, no persisted project list.** Switching to a project_root folder for the first time or `/create`-ing one simply adds it to the orchestrator's in-memory project registry for the rest of that process's lifetime (session continuity — the active Claude Code session id — included); nothing is written to disk beyond the folder itself. `project_root` is the single source of truth, so there's nothing else that needs to stay in sync with it.
-- **`/project <name-or-number>`** accepts either a project name or its number from the current `/projects` listing. Numbers reflect a fresh scan each time, sorted alphabetically for a predictable (if not permanently stable) order — list, then act on it promptly.
+- **`/project <name-or-number>`** accepts either a project name or its number from the current `/projects` listing. Numbers reflect a fresh scan each time, sorted alphabetically by path part (so a container's projects come right after the container) for a predictable (if not permanently stable) order — list, then act on it promptly.
+- **`/projects` groups nested projects under their container.** Each container is an unnumbered `📁 <container>` header, and its projects (and sub-containers) follow it, indented two spaces per level. The reply to `/project <container>` shows the same subtree with the same numbers.
 - **`/projects` shows just the name for anything under `project_root`** — the path is redundant once every such project already shares that root. A static `config.yaml` entry whose path falls *outside* `project_root` still shows its full path, since there's no shared root to omit it against.
-- **`/create <name>`** still exists for the one thing discovery alone can't do: making a *new* empty folder. `<name>` must match `^[A-Za-z0-9_-]{1,100}$` — no slashes, no `..`, no nested paths, making path-traversal structurally impossible rather than relying on normalization logic to catch it. It's otherwise just `mkdir` + switch — no separate registration, since the folder is automatically a project the instant it exists. Fails safe on collision (name already available, from either source) rather than silently adopting or overwriting.
+- **`/create <name>`** still exists for the one thing discovery alone can't do: making a *new* empty folder, directly under `project_root` (`<name>`) or inside a listed container that exists (`<container>/<name>`, e.g. `c/car/newapp`). The new folder's own name must match `^[A-Za-z0-9_-]{1,100}$` — no slashes, no `..` — and its parent must be `project_root` or a known container, making path-traversal structurally impossible rather than relying on normalization logic to catch it. It's otherwise just `mkdir` + switch — no separate registration, since the folder is automatically a project the instant it exists. Fails safe on collision (name already available, from either source) rather than silently adopting or overwriting.
 
 ### 7.3 Escaping to Claude Code's own commands/skills (`/c`)
 
@@ -319,6 +321,10 @@ projects:
 
 # optional; parent directory /create may make new project folders under (§7.2)
 project_root: /home/centos/PycharmProjects
+# optional; folders under project_root that hold projects (§7.2)
+project_containers:
+  - c
+  - c/car
 
 claude_code:
   binary: claude
@@ -356,7 +362,7 @@ bridge:
 
 ## 9. Security Considerations
 
-- **Blast radius containment:** Claude Code always runs with permissions auto-approved, so the *only* safety boundary is the working-directory confinement to configured project paths. The implementation must guarantee the `claude` process is never launched with a working directory outside the configured project list, and should not blindly trust paths embedded in message text for anything other than the attachment-inbox convention in §5.3. `project_root` (§7.2) is the one deliberate, bounded exception to "the project list is static" — both `/create` and switching to an already-existing folder are confined to that one pre-configured directory (flat, regex-validated names only for `/create`), so the boundary itself never moves; it just means the owner is trusting the *entire* `project_root` subtree up front, not each folder individually as it's first used.
+- **Blast radius containment:** Claude Code always runs with permissions auto-approved, so the *only* safety boundary is the working-directory confinement to configured project paths. The implementation must guarantee the `claude` process is never launched with a working directory outside the configured project list, and should not blindly trust paths embedded in message text for anything other than the attachment-inbox convention in §5.3. `project_root` (§7.2) is the one deliberate, bounded exception to "the project list is static" — both `/create` and switching to an already-existing folder are confined to that one pre-configured directory (regex-validated folder names, inside `project_root` or a listed container, for `/create`), so the boundary itself never moves; it just means the owner is trusting the *entire* `project_root` subtree up front, not each folder individually as it's first used.
 - **Self-chat scoping is the primary access control.** Only the account owner can write to their own "Message Yourself" thread, which is why this is a stronger boundary than sender-ID filtering alone. `message.key.fromMe` (§4.1) is retained as defense-in-depth in case of a future Baileys/WhatsApp behavior change around that chat.
 - **No inbound network exposure.** Redis is loopback-only; the bridge makes only outbound connections to WhatsApp's servers. There is no listening port reachable from outside the machine.
 - **Local secrets:** Baileys' auth/session directory contains credentials equivalent to a logged-in WhatsApp Web session — treat it like a credential store (filesystem permissions restricted to the owning user, excluded from any backups that leave the machine unencrypted).
@@ -411,7 +417,7 @@ bridge:
 | 22 | Toggle scope | Global (all projects), not per-project |
 | 23 | Toggle persistence | Persisted to disk, survives restarts; fresh install defaults to enabled |
 | 24 | `/create` UX | One combined command (create + switch), not two steps |
-| 25 | `/create` naming rule | Flat names only, regex-validated — no nested paths |
+| 25 | `/create` naming rule | Regex-validated folder name, placed directly under `project_root` or inside a listed container — never an arbitrary path |
 | 26 | `/create` collision handling | Reject on any existing name — from `config.yaml`, a `project_root` folder, or an on-disk folder — never silently adopt or overwrite |
 | 27 | `/create` command naming | `/create`, not `/newproject` — avoids clashing with `/new` and `/project` |
 | 28 | Reaching Claude Code's own commands/skills | Dedicated escape command `/c <text>`, not a blanket fallthrough of unrecognized `/word` text — keeps the typo-safety of "Unknown command" errors for the orchestrator's own commands |
@@ -443,3 +449,6 @@ bridge:
 | 54 | Give-up behavior | Clean `process.exit(0)` so `Restart=on-failure` leaves the service stopped, rather than an in-process idle state or a failing exit that would just restart the whole cycle |
 | 55 | WhatsApp protocol version | Fetched via `fetchLatestBaileysVersion()` at startup, not the version bundled with the pinned Baileys release — avoids a stale protocol version causing handshake rejections that look identical to a real outage |
 | 56 | Voice-summary selection | A `## 🔊 Audio Summary` heading parsed out of Claude Code's free-form reply text selects the short spoken-style summary to speak (§7.4) — unlike decisions #20 and #38's preference against markers-in-free-text, a missing or malformed heading here degrades gracefully to speaking the full reply (already the behavior when no summary is present) rather than silently breaking an action, which is what motivated those two rules |
+| 57 | Nested project discovery | Containers are listed by hand in `project_containers`, not guessed from marker files — a folder's contents don't reliably say whether it is a project or a folder of projects |
+| 58 | Nested project naming | Path relative to `project_root` (`c/car/maintenance`), not the basename — basenames collide across containers |
+| 59 | Container selection | A container is shown as an unnumbered header and is never selectable; `/project <container>` lists its projects |

@@ -70,6 +70,12 @@ Edit `~/.config/claude-orchestrator/config.yaml`:
   `/project <name>` — and it's also the only place `/create <name>` is
   allowed to make new project folders (SPEC.md §7.2). Leave unset to only
   use the static `projects` list above and disable `/create`.
+- `project_containers` — optional. Folders under `project_root`, as relative
+  paths (e.g. `c`, `c/car`), that hold projects instead of being one. Each
+  is scanned one level deep, and its projects are named by relative path
+  (`c/whey`, `c/car/maintenance`). A missing container is skipped with a
+  warning in the log. Restart the orchestrator after changing this list
+  (SPEC.md §7.2).
 - `tts.voices` — maps a detected reply language to a Piper voice id
   (defaults: `en_US-ljspeech-high`, `es_AR-daniela-high`). Only used once you
   send `/voice on` (SPEC.md §7.4); any other detected language falls back to
@@ -160,15 +166,18 @@ In your "Message Yourself" WhatsApp chat:
   Disabled messages are simply left alone; your own WhatsApp history is
   the backup, nothing is copied elsewhere.
 - `/project <name-or-number>` — switch active project, by name or by its
-  number from `/projects`. Any folder under `project_root` works
-  immediately, with no separate registration step (SPEC.md §7.2).
+  number from `/projects`. Any project folder under `project_root` or one of
+  its containers works immediately, with no separate registration step.
+  `/project <container>` lists that container's projects (SPEC.md §7.2).
 - `/projects` — list every available project (config.yaml plus every
-  `project_root` folder), numbered. Shows just the name for anything under
+  `project_root` project folder), numbered. Each container is an unnumbered
+  `📁` header with its projects indented under it. Shows just the name for anything under
   `project_root` — a `config.yaml` project whose path falls outside it still
   shows its full path.
-- `/create <name>` — create a new project folder under `project_root` and
-  switch to it (only if `project_root` is configured; flat names only, no
-  slashes — SPEC.md §7.2).
+- `/create <name>` or `/create <container>/<name>` — create a new project
+  folder under `project_root` or inside one of its containers and switch to
+  it (only if `project_root` is configured; the folder name allows letters,
+  numbers, `-` and `_` — SPEC.md §7.2).
 - `/new` — reset the active project's Claude Code session.
 - `/stop` — cancel the task currently running for the active project.
 - `/enable` / `/disable` — allow/stop messages from reaching Claude Code.

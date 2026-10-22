@@ -2,11 +2,14 @@
 
 from __future__ import annotations
 
+import logging
 import os
 from dataclasses import dataclass, field
 from pathlib import Path
 
 import yaml
+
+logger = logging.getLogger(__name__)
 
 DEFAULT_CONFIG_PATH = Path(
     os.environ.get(
@@ -95,6 +98,9 @@ class Config:
     # Parent directory /create is allowed to make new project folders under
     # (SPEC.md §7.2). None means /create is not configured/available.
     project_root: Path | None = None
+    # Folders under project_root, as relative paths, that hold projects
+    # instead of being one (SPEC.md §7.2). Each is scanned one level deep.
+    project_containers: tuple[str, ...] = ()
 
     @property
     def default_project(self) -> ProjectConfig:
@@ -142,6 +148,7 @@ def load_config(path: Path | None = None) -> Config:
     bridge_raw = raw.get("bridge") or {}
     project_root_raw = raw.get("project_root")
     project_root = Path(project_root_raw).expanduser() if project_root_raw else None
+    project_containers = _parse_project_containers(raw.get("project_containers"), project_root)
 
     return Config(
         whatsapp=WhatsAppConfig(allowed_sender_jid=whatsapp_raw["allowed_sender_jid"]),
@@ -181,4 +188,28 @@ def load_config(path: Path | None = None) -> Config:
             ).expanduser(),
         ),
         project_root=project_root,
+        project_containers=project_containers,
     )
+
+
+def _parse_project_containers(raw: object, project_root: Path | None) -> tuple[str, ...]:
+    """Normalize `project_containers` to relative names like "c/car". An
+    entry that is not a plain relative path inside project_root (absolute,
+    empty, ".", "..", or a hidden part) is logged and skipped."""
+    if not raw:
+        return ()
+    if project_root is None:
+        logger.warning("project_containers is set but project_root is not; ignoring it")
+        return ()
+    if not isinstance(raw, list):
+        logger.warning("project_containers must be a list; ignoring it")
+        return ()
+    containers: list[str] = []
+    for entry in raw:
+        text = str(entry).strip()
+        parts = text.rstrip("/").split("/")
+        if text.startswith("/") or any(not part or part.startswith(".") for part in parts):
+            logger.warning("skipping invalid project_containers entry %r", entry)
+            continue
+        containers.append("/".join(parts))
+    return tuple(containers)

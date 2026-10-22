@@ -21,12 +21,21 @@ projects:
 
 # Optional. Every immediate, non-hidden folder under here is automatically
 # an available project (SPEC.md §7.2) — switch with /project <name-or-number>,
-# no registration needed, discovered live each time. Also the only place
-# /create <name> is allowed to make new folders (flat names only, no
-# slashes/".." — validated against a safe charset, bounded to one tree).
-# Leave unset to only use the static `projects` list above and disable
-# /create.
+# no registration needed, discovered live each time. Also the only tree
+# /create is allowed to make new folders in (folder names validated against
+# a safe charset, no slashes/".."). Leave unset to only use the static
+# `projects` list above and disable /create.
 project_root: /home/centos/PycharmProjects
+
+# Optional. Folders under project_root, as relative paths, that hold
+# projects instead of being one (SPEC.md §7.2). Each is scanned one level
+# deep; its projects are named by relative path (c/whey, c/car/maintenance)
+# and /create c/newapp works inside it. A nested container (c/car) is
+# only scanned when its parent (c) is listed too. Read at startup —
+# restart after changing it.
+# project_containers:
+#   - c
+#   - c/car
 
 claude_code:
   # Must be an absolute path: systemd --user units don't reliably inherit

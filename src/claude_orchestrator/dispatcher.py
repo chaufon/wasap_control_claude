@@ -19,6 +19,7 @@ from .commands import HELP_TEXT, Command, parse_command
 from .config import Config, ProjectConfig
 from .formatting import format_response
 from .models import IncomingMessage, OutgoingMessage
+from .projects import ProjectScan, render_listing, scan_project_root, sort_key
 from .outbox import MAX_FILE_SIZE_BYTES, collect_outgoing_files, content_hash8
 from .redis_client import RedisBus
 from .state import PersistedState, load_state, save_state
@@ -28,9 +29,10 @@ from .voice_summary import VOICE_SUMMARY_SYSTEM_PROMPT, split_reply
 
 logger = logging.getLogger(__name__)
 
-# Flat names only — no slashes/dots/".." (SPEC.md §7.2 Q4): this makes an
-# entire class of path-traversal bugs structurally impossible rather than
-# relying on careful normalization.
+# One folder name — no slashes/dots/".." (SPEC.md §7.2 Q4). /create checks
+# each new folder name against this, and its parent against the known
+# containers, which makes an entire class of path-traversal bugs
+# structurally impossible rather than relying on careful normalization.
 _VALID_PROJECT_NAME_RE = re.compile(r"^[A-Za-z0-9_-]{1,100}$")
 
 # Anything starting with "/" is unambiguously an attempted command, never a
@@ -132,6 +134,14 @@ class Dispatcher:
         for project_name, project_state in self._projects.items():
             project_state.session_id = self._state.session_ids.get(project_name)
         self._active_project = self._restore_active_project()
+        found = self._scan().containers
+        for container in config.project_containers:
+            if container not in found:
+                logger.warning(
+                    "project container %r not found under %s; skipping it",
+                    container,
+                    config.project_root,
+                )
 
     def _adopt_project(self, name: str, path: Path) -> None:
         """Register a project_root-discovered folder the first time it's
@@ -197,20 +207,14 @@ class Dispatcher:
             return None
         return result.session_id
 
-    def _scan_project_root(self) -> dict[str, Path]:
-        """Live view of project_root's immediate, non-hidden subfolders
-        (SPEC.md §7.2) — every one of them is automatically an available
-        project, no registration step required. Re-scanned on every call
-        rather than cached, so a folder created outside the bot (or by
-        /create) shows up immediately without an orchestrator restart."""
-        root = self._config.project_root
-        if root is None or not root.is_dir():
-            return {}
-        return {
-            entry.name: entry
-            for entry in sorted(root.iterdir())
-            if entry.is_dir() and not entry.name.startswith(".")
-        }
+    def _scan(self) -> ProjectScan:
+        """Live view of project_root's non-hidden subfolders and those of
+        its project_containers (SPEC.md §7.2) — every one of them is
+        automatically an available project, no registration step required.
+        Re-scanned on every call rather than cached, so a folder created
+        outside the bot (or by /create) shows up immediately without an
+        orchestrator restart."""
+        return scan_project_root(self._config.project_root, self._config.project_containers)
 
     def _all_known_projects(self) -> dict[str, Path]:
         """Every available project name -> path: config.yaml's static list
@@ -222,17 +226,18 @@ class Dispatcher:
         time under its own basename, or the two names would end up as two
         independent ProjectState entries pointed at one directory — each
         with its own "busy" check, risking two `claude` processes racing
-        against the same cwd. Sorted for a stable /projects numbering."""
+        against the same cwd. Sorted by path parts for a stable /projects
+        numbering that keeps a container's children together."""
         combined: dict[str, Path] = {
             name: state.config.path for name, state in self._projects.items()
         }
         known_paths = {path.resolve() for path in combined.values()}
-        for name, path in self._scan_project_root().items():
+        for name, path in self._scan().projects.items():
             if name in combined or path.resolve() in known_paths:
                 continue
             combined[name] = path
             known_paths.add(path.resolve())
-        return dict(sorted(combined.items()))
+        return dict(sorted(combined.items(), key=lambda item: sort_key(item[0])))
 
     def _format_project_line(self, name: str, path: Path) -> str:
         """Just the name for anything under project_root — the path is
@@ -330,6 +335,19 @@ class Dispatcher:
             if not command.arg:
                 await self._reply("Usage: /project <name-or-number>", message)
                 return
+            container = command.arg.rstrip("/")
+            if container in self._scan().containers:
+                lines = render_listing(
+                    self._all_known_projects(),
+                    self._scan().containers,
+                    self._format_project_line,
+                    under=container,
+                )
+                await self._reply(
+                    f"📁 {container} is a folder of projects. Pick one:\n" + "\n".join(lines),
+                    message,
+                )
+                return
             name = self._resolve_project_name(command.arg)
             if name is None:
                 await self._reply(
@@ -341,11 +359,9 @@ class Dispatcher:
             return
 
         if command.name == "projects":
-            all_projects = self._all_known_projects()
-            lines = [
-                f"{i}. {self._format_project_line(name, path)}"
-                for i, (name, path) in enumerate(all_projects.items(), start=1)
-            ]
+            lines = render_listing(
+                self._all_known_projects(), self._scan().containers, self._format_project_line
+            )
             marker = f"\n\nActive: {self._active_project}"
             await self._reply("Available projects:\n" + "\n".join(lines) + marker, message)
             return
@@ -455,14 +471,23 @@ class Dispatcher:
             return
 
         if not command.arg:
-            await self._reply("Usage: /create <name>", message)
+            await self._reply("Usage: /create <name> or /create <container>/<name>", message)
             return
 
         name = command.arg
-        if not _VALID_PROJECT_NAME_RE.match(name):
+        parent, _, leaf = name.rpartition("/")
+        if not _VALID_PROJECT_NAME_RE.match(leaf):
             await self._reply(
                 "❌ Invalid project name. Use only letters, numbers, hyphens, and "
-                "underscores (1-100 characters) — no slashes or nested paths.",
+                "underscores (1-100 characters).",
+                message,
+            )
+            return
+        containers = self._scan().containers
+        if parent and parent not in containers:
+            listed = ", ".join(containers) or "none"
+            await self._reply(
+                f"❌ '{parent}' is not a project container. Containers: {listed}.",
                 message,
             )
             return
