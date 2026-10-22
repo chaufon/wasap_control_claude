@@ -48,6 +48,21 @@ claude_code:
   # request is treated as a failure (SPEC.md §5.7).
   task_timeout_seconds: 900
 
+# Remote Control server that /project and /create start for each project, so
+# it shows up in the Claude app's Code tab (SPEC.md §7.7). Uses
+# claude_code.binary above. Needs tmux.
+remote_control:
+  # acceptEdits | auto | bypassPermissions | default | dontAsk | plan.
+  # bypassPermissions never asks, like the claude -p path. auto asks about
+  # actions its safety check flags. default asks for every edit.
+  permission_mode: bypassPermissions
+  # same-dir: every session works in the project folder itself.
+  # worktree: each new session gets its own git worktree (git repos only).
+  spawn: same-dir
+  # Claude in Chrome for spawned sessions. false: browser work goes through
+  # the Playwright MCP plugin, not your real, logged-in Chrome.
+  chrome: false
+
 whisper:
   model: large-v3
   device: cuda

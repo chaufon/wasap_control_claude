@@ -231,14 +231,15 @@ All commands are plain text messages in the self-chat, starting with `/`.
 
 | Command | Effect |
 |---|---|
-| `/project <name-or-number>` | Switch the active project — any `config.yaml` project, or any project folder under `project_root` or one of its `project_containers` — by name or by its `/projects` list number. Naming a container lists its projects instead. See §7.2. |
+| `/project <name-or-number>` | Switch the active project — any `config.yaml` project, or any project folder under `project_root` or one of its `project_containers` — by name or by its `/projects` list number — and start that project's Remote Control server (§7.7). Naming a container lists its projects instead. See §7.2. |
 | `/projects` | List every available project (config.yaml plus every `project_root` project folder), numbered, with each container's projects grouped under it. |
-| `/create <name>` | Create a new project folder under `project_root` (`<name>`) or under one of its containers (`<container>/<name>`) and switch to it — see §7.2. |
+| `/create <name>` | Create a new project folder under `project_root` (`<name>`) or under one of its containers (`<container>/<name>`) switch to it and start its Remote Control server — see §7.2, §7.7. |
+| `/close [name-or-number]` | Stop a project's Remote Control server — the active project's when no argument is given. See §7.7. |
 | `/new` | Reset the active project's Claude Code session — the next prompt starts a fresh conversation instead of continuing. |
 | `/stop` | Cancel the currently running task for the active project, if any. |
 | `/enable` | Allow messages to reach Claude Code (global, all projects). |
 | `/disable` | Stop messages from reaching Claude Code (global, all projects) — see §7.1. |
-| `/status` | Report enabled/disabled state, active project, whether it's busy or idle, and the active project's Claude Code session ID (or "none yet"). |
+| `/status` | Report enabled/disabled state, active project, whether it's busy or idle, the active project's Claude Code session ID (or "none yet"), and the running Remote Control servers (or "none"). |
 | `/c <text>` | Send `<text>` to Claude Code verbatim as the prompt, bypassing the command table above — see §7.3. |
 | `/voice on` \| `/voice off` | Also send replies as a voice note, in the reply's own detected language (off by default) — see §7.4. |
 | `/help` | List available commands. |
@@ -251,7 +252,7 @@ The owner's everyday personal WhatsApp number is used for this integration, and 
 
 - While **enabled** (the default on first install), non-command messages behave exactly as described elsewhere in this document — text becomes a prompt, voice notes are transcribed then prompted, attachments are staged then prompted.
 - While **disabled**, the orchestrator does nothing extra with non-command messages: no transcription, no attachment staging, no prompt to Claude Code, no reply at all. WhatsApp's own chat history is treated as sufficient "backup" — no separate archiving is implemented. This silence is specifically for non-command text/voice/attachments, since those could plausibly be personal notes.
-- Commands (`/project`, `/projects`, `/new`, `/stop`, `/enable`, `/disable`, `/status`, `/help`) always run regardless of the toggle state — otherwise there'd be no way to `/enable` again.
+- Commands (`/project`, `/projects`, `/close`, `/new`, `/stop`, `/enable`, `/disable`, `/status`, `/help`) always run regardless of the toggle state — otherwise there'd be no way to `/enable` again.
 - Anything else starting with `/` — `/c` (§7.3) or an unrecognized command like `/usage` — is unambiguously an attempted command, never a personal note, so while disabled it gets an explicit "🔴 Claude Code is disabled. Send /enable first." reply instead of either running or going silent. This also means an unrecognized command's reply differs depending on toggle state: the disabled notice takes priority over "Unknown command" while disabled, since that's the more actionable fact.
 - `/disable` does not cancel a task already running (`/stop` still does that separately); it only gates *new* prompts from being dispatched.
 - The toggle state persists across orchestrator restarts (a small local JSON state file, independent of `config.yaml`), so a deliberate `/disable` survives a crash/reboot/service update instead of silently reverting.
@@ -306,6 +307,20 @@ WhatsApp's native reply/quote feature, distinct from forwarding — see §5.10 f
 - **No persistent tracking system.** A quoted attachment/voice note is simply re-downloaded fresh at reply-time (§5.10 step 3), the same one-shot media-download call already used for a normal attachment — not resolved through a WhatsApp-message-id → project-file-path index. No state file to maintain, no bridge→orchestrator acknowledgment channel, nothing that can fall out of sync across a restart.
 - **Content-hash filenames, both directions.** Because Claude Code could plausibly generate the same filename (e.g. `report.pdf`) more than once across different tasks, and because replies mean the same underlying file can end up referenced from more than one place over time, both `whatsapp-inbox/` (§5.3) and `whatsapp-outbox/sent/` (§7.5) suffix the stored filename with the first 8 hex characters of the file's own sha256 (e.g. `report_a3f9c2d1.pdf`) — identical content always produces the identical suffix, and two different files never silently overwrite one another.
 
+### 7.7 Remote Control servers (`/project`, `/create`, `/close`)
+
+`/project` and `/create` also start a `claude remote-control` server in the project's folder, so the project shows up in the Code tab of the Claude mobile app as a full, live Claude Code session — skills, hooks, MCP servers and `CLAUDE.md` included. The `claude -p` path (§4.4) is unchanged and runs beside it.
+
+- **One server per project, in its own detached tmux session.** The session name is `rc-` plus the project name with every character outside `[A-Za-z0-9_-]` replaced by `-` (`c/whey` → `rc-c-whey`); the same name is passed as `--name`, so it is what the app shows. Names, not `/projects` numbers, are used because the numbers shift as folders come and go (§7.2). From the laptop, `tmux attach -t rc-c-whey` opens the same server.
+- **Started once.** If the project's tmux session is already live, `/project` reports "already live" and starts nothing. A session whose process has exited is removed and started again.
+- **Sessions keep their mode.** A starting server brings back the sessions it served before (for about four hours after it stopped), and a brought-back session keeps the permission mode it was created with. `remote_control.permission_mode` applies to sessions the server creates. To get a session in the current mode, archive the old one in the app and start the server again after that window.
+- **Command line:** `<claude_code.binary> remote-control --name rc-<name> --spawn <remote_control.spawn> --permission-mode <remote_control.permission_mode> --chrome|--no-chrome` (§8). The permission mode defaults to `bypassPermissions`, so sessions on the phone never ask for approval — the same trust the `claude -p` path runs with (`--dangerously-skip-permissions`, decision #3). `auto` still stops to ask about actions its safety check flags. `--chrome` or `--no-chrome` comes from `remote_control.chrome`, off by default: browser work in these sessions goes through the Playwright MCP plugin, not the owner's real, logged-in Chrome. The owner's own `/chrome` setting is not consulted. `--continue` is not used: it resumes one earlier session in single-session mode, which exits when that session ends and accepts no new ones; the Code tab already lists earlier sessions.
+- **The owner's own environment.** The server runs through the owner's login shell in interactive mode (`<shell> -lic`), so it and its sessions get the same environment as a terminal (`PATH`, Node version managers, `~/.bashrc`), not the orchestrator service's. The service's `LD_LIBRARY_PATH` (§10) is removed. The arguments reach the binary as `"$0" "$@"`, never parsed by the shell. Claude Code itself reads the owner's `~/.claude` settings, plugins, hooks and MCP servers, as for any session run by that user.
+- **Folder trust.** The server has no one to answer Claude Code's folder-trust prompt, so before starting it the orchestrator sets `projects["<absolute path>"].hasTrustDialogAccepted = true` in `~/.claude.json` — the same flag the prompt writes. The file is written only when the flag is missing or false, through a temp file and rename. Only folders the dispatcher resolved from the project list (§7.2) are ever marked, never a path from message text.
+- **Outside the service's lifetime.** The tmux server is started through `systemd-run --user --scope`, so it lives in its own scope unit and a restart of `claude-orchestrator.service` leaves every server running. Servers do not come back after a reboot or logout, and do not stop on their own when idle; `/close` stops one.
+- **Reply.** The orchestrator waits up to 20 seconds for the `https://claude.ai/code…` URL the server prints once it is connected, then replies "🟢 rc-<name> is live" with that URL. A server that exits first is reported with the last 15 lines of its output and removed. A server still without a URL after the wait is left running and reported as still starting. The project switch stands whatever the outcome.
+- **Switching away does not close.** `/project` to another project leaves the earlier server running. `/status` lists every live `rc-*` session.
+
 ## 8. Configuration
 
 A local config file (e.g. `~/.config/claude-orchestrator/config.yaml`) defines:
@@ -331,6 +346,16 @@ claude_code:
   # per-task hard timeout, e.g. 15m, after which the process is killed
   # and treated as a failure (§5.7)
   task_timeout_seconds: 900
+
+# Remote Control server started by /project and /create (§7.7)
+remote_control:
+  # acceptEdits | auto | bypassPermissions | default | dontAsk | plan
+  permission_mode: bypassPermissions
+  # same-dir: every session works in the project folder itself
+  # worktree: each new session gets its own git worktree (git repos only)
+  spawn: same-dir
+  # Claude in Chrome for spawned sessions; off means Playwright MCP only
+  chrome: false
 
 whisper:
   model: large-v3
@@ -363,6 +388,7 @@ bridge:
 ## 9. Security Considerations
 
 - **Blast radius containment:** Claude Code always runs with permissions auto-approved, so the *only* safety boundary is the working-directory confinement to configured project paths. The implementation must guarantee the `claude` process is never launched with a working directory outside the configured project list, and should not blindly trust paths embedded in message text for anything other than the attachment-inbox convention in §5.3. `project_root` (§7.2) is the one deliberate, bounded exception to "the project list is static" — both `/create` and switching to an already-existing folder are confined to that one pre-configured directory (regex-validated folder names, inside `project_root` or a listed container, for `/create`), so the boundary itself never moves; it just means the owner is trusting the *entire* `project_root` subtree up front, not each folder individually as it's first used.
+- **Remote Control servers (§7.7) widen who drives a project, not where.** Each server runs in a project folder from the same project list, so the working-directory boundary above holds. What changes is the client: anyone signed in to the owner's Claude account can open a session on a live server from the Claude app or claude.ai. Setting `hasTrustDialogAccepted` skips the folder-trust prompt only for folders already inside that boundary; it is never set for a path taken from message text. The server's own permission mode (`remote_control.permission_mode`, §8) decides what a session may do without asking.
 - **Self-chat scoping is the primary access control.** Only the account owner can write to their own "Message Yourself" thread, which is why this is a stronger boundary than sender-ID filtering alone. `message.key.fromMe` (§4.1) is retained as defense-in-depth in case of a future Baileys/WhatsApp behavior change around that chat.
 - **No inbound network exposure.** Redis is loopback-only; the bridge makes only outbound connections to WhatsApp's servers. There is no listening port reachable from outside the machine.
 - **Local secrets:** Baileys' auth/session directory contains credentials equivalent to a logged-in WhatsApp Web session — treat it like a credential store (filesystem permissions restricted to the owning user, excluded from any backups that leave the machine unencrypted).
@@ -371,7 +397,7 @@ bridge:
 
 ## 10. Deployment & Operations
 
-1. **Prerequisites:** Node.js (current LTS), Python (≥3.11, matching existing `pyproject.toml` scaffold), `redis-server` (via apt), `ffmpeg`. GPU-accelerated `faster-whisper` needs CUDA/cuDNN libraries loadable at runtime; these come from the `nvidia-cublas-cu12`/`nvidia-cudnn-cu12` pip wheels (pulled in with the rest of the Python dependencies, no system-wide CUDA install needed), with the systemd unit's `LD_LIBRARY_PATH` pointing at those wheels' `lib/` directories inside the venv so they're found at process start.
+1. **Prerequisites:** Node.js (current LTS), Python (≥3.11, matching existing `pyproject.toml` scaffold), `redis-server`, `ffmpeg` and `tmux` (via apt). GPU-accelerated `faster-whisper` needs CUDA/cuDNN libraries loadable at runtime; these come from the `nvidia-cublas-cu12`/`nvidia-cudnn-cu12` pip wheels (pulled in with the rest of the Python dependencies, no system-wide CUDA install needed), with the systemd unit's `LD_LIBRARY_PATH` pointing at those wheels' `lib/` directories inside the venv so they're found at process start.
 2. **Disable automatic suspend/sleep** in Kubuntu power settings (screen lock/screensaver may remain enabled).
 3. **Pairing:** run the bridge interactively once to scan the WhatsApp QR pairing code; confirm the auth directory persists across restarts.
 4. **systemd units** (both `systemctl --user`, so they start on login and stop on logout, per §9 in the interview):
@@ -452,3 +478,10 @@ bridge:
 | 57 | Nested project discovery | Containers are listed by hand in `project_containers`, not guessed from marker files — a folder's contents don't reliably say whether it is a project or a folder of projects |
 | 58 | Nested project naming | Path relative to `project_root` (`c/car/maintenance`), not the basename — basenames collide across containers |
 | 59 | Container selection | A container is shown as an unnumbered header and is never selectable; `/project <container>` lists its projects |
+| 60 | Remote Control process host | A detached tmux session per project, started through `systemd-run --user --scope` — tmux lets the owner attach from the laptop, and the scope keeps servers alive across orchestrator restarts |
+| 61 | Remote Control naming | `rc-` + the project name with separators replaced by `-`, used for both the tmux session and `--name` — `/projects` numbers shift, names do not |
+| 62 | Remote Control trigger | `/project` and `/create` start the server; `/close` stops it, separate from `/stop`, which keeps cancelling the `claude -p` task |
+| 63 | Remote Control folder trust | Set `hasTrustDialogAccepted` in `~/.claude.json` before launch — the server has no one to answer the trust prompt, and only project-list folders are ever marked |
+| 64 | Remote Control resume | No `--continue` — it runs a single session that exits when done; a fresh server accepts many sessions and the app already lists earlier ones |
+| 65 | Remote Control lifetime | On demand only: no restart after reboot, no idle timeout, switching away keeps the server; `/status` lists live servers |
+| 66 | Remote Control environment | The server starts through the owner's interactive login shell so phone sessions behave like terminal sessions, with Claude in Chrome off so browser work goes through Playwright MCP rather than the owner's logged-in Chrome; permission mode defaults to `bypassPermissions` because `project_root` is meant to run without approval prompts, and `auto` still asks about flagged actions |

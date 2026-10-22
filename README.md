@@ -7,7 +7,7 @@ design and rationale; this file only covers setup and running it.
 
 ```bash
 sudo apt update
-sudo apt install -y redis-server ffmpeg nodejs npm
+sudo apt install -y redis-server ffmpeg nodejs npm tmux
 ```
 
 - **Node.js ≥ 20** (already present on this machine).
@@ -28,6 +28,8 @@ sudo apt install -y redis-server ffmpeg nodejs npm
 - A logged-in Claude Code CLI session on this machine (`claude login`) under
   the Pro subscription — the orchestrator shells out to `claude`, it never
   uses an API key.
+- `tmux` (already listed above) hosts the Remote Control server `/project`
+  starts for each project (SPEC.md §7.7).
 - **Disable automatic suspend/sleep** in system power settings (screen
   lock/screensaver is fine — see SPEC.md §2).
 
@@ -76,6 +78,14 @@ Edit `~/.config/claude-orchestrator/config.yaml`:
   (`c/whey`, `c/car/maintenance`). A missing container is skipped with a
   warning in the log. Restart the orchestrator after changing this list
   (SPEC.md §7.2).
+- `remote_control` — optional. `permission_mode` (default
+  `bypassPermissions`, so phone sessions never ask for approval, like the
+  WhatsApp `claude -p` path)
+  and `spawn` (default `same-dir`; `worktree` gives each new session its own
+  git worktree) and `chrome` (default `false`: no Claude in Chrome, so
+  browser work uses Playwright MCP) for the Remote Control server
+  `/project` starts (SPEC.md
+  §7.7).
 - `tts.voices` — maps a detected reply language to a Piper voice id
   (defaults: `en_US-ljspeech-high`, `es_AR-daniela-high`). Only used once you
   send `/voice on` (SPEC.md §7.4); any other detected language falls back to
@@ -169,6 +179,14 @@ In your "Message Yourself" WhatsApp chat:
   number from `/projects`. Any project folder under `project_root` or one of
   its containers works immediately, with no separate registration step.
   `/project <container>` lists that container's projects (SPEC.md §7.2).
+  It also starts the project's Remote Control server, so the project shows
+  up in the Code tab of the Claude mobile app as a full Claude Code session.
+  The server starts through your login shell, so its sessions get the same
+  environment and settings as `claude` in a terminal. Claude in Chrome is
+  off for them, so browser work goes through the Playwright MCP plugin.
+  The reply says "🟢 rc-c-whey is live" with a claude.ai link once it's up;
+  a second `/project` reuses the running server. From the laptop,
+  `tmux attach -t rc-c-whey` opens the same server (SPEC.md §7.7).
 - `/projects` — list every available project (config.yaml plus every
   `project_root` project folder), numbered. Each container is an unnumbered
   `📁` header with its projects indented under it. Shows just the name for anything under
@@ -177,12 +195,18 @@ In your "Message Yourself" WhatsApp chat:
 - `/create <name>` or `/create <container>/<name>` — create a new project
   folder under `project_root` or inside one of its containers and switch to
   it (only if `project_root` is configured; the folder name allows letters,
-  numbers, `-` and `_` — SPEC.md §7.2).
+  numbers, `-` and `_` — SPEC.md §7.2). Like `/project`, it starts the new
+  project's Remote Control server.
+- `/close [name-or-number]` — stop a project's Remote Control server (the
+  active project's when no argument is given). Servers keep running when you
+  switch to another project, survive orchestrator restarts, and end on
+  reboot or logout (SPEC.md §7.7).
 - `/new` — reset the active project's Claude Code session.
 - `/stop` — cancel the task currently running for the active project.
 - `/enable` / `/disable` — allow/stop messages from reaching Claude Code.
-- `/status` — enabled/disabled state, active project, busy/idle, and the
-  active project's Claude Code session ID. Handy for continuing the same
+- `/status` — enabled/disabled state, active project, busy/idle, the
+  active project's Claude Code session ID, and the running Remote Control
+  servers. Handy for continuing the same
   conversation from a terminal later: `claude --resume <session ID>` from
   that project's directory (a `/name`'d title only resolves in `--print`
   mode, not the interactive picker, so the ID is the reliable way to resume
@@ -227,8 +251,66 @@ In your "Message Yourself" WhatsApp chat:
 
 ```
 SPEC.md                    full technical specification
-src/claude_orchestrator/   Python orchestrator (dispatcher, Claude Code CLI wrapper, transcription, TTS, outgoing files, formatting, enable/disable state)
+src/claude_orchestrator/   Python orchestrator (dispatcher, Claude Code CLI wrapper, Remote Control launcher, transcription, TTS, outgoing files, formatting, enable/disable state)
 whatsapp-bridge/           Node.js/TypeScript Baileys <-> Redis bridge
 config/config.example.yaml config template (copy to ~/.config/claude-orchestrator/config.yaml)
 systemd/                   systemd --user unit files
 ```
+
+## Changelog
+
+Newest first. Details for each change are in SPEC.md and the git history.
+
+### 2026-10-22
+
+- `/project` and `/create` start a Claude Code Remote Control server for the
+  project in a detached tmux session (`rc-<name>`), so the project opens in
+  the Code tab of the Claude mobile app. The server runs through your login
+  shell, in `bypassPermissions` mode, with Claude in Chrome off. Servers
+  survive orchestrator restarts.
+- New `/close [name-or-number]` command stops a project's server.
+- `/status` lists the running servers.
+- New `remote_control` config block: `permission_mode`, `spawn`, `chrome`.
+- `tmux` is a prerequisite.
+- Nested project containers: `project_containers` lists folders under
+  `project_root` that hold projects (`c/whey`, `c/car/maintenance`).
+  `/projects` groups projects under their container, and `/create` accepts
+  `<container>/<name>`.
+
+### 2026-08-18
+
+- Voice replies speak a short spoken summary of the answer instead of the
+  full text.
+- GPU transcription uses the pip-installed CUDA libraries (`LD_LIBRARY_PATH`
+  in the systemd unit).
+
+### 2026-08-06
+
+- Each project's Claude Code session ID persists across restarts.
+- `/new` creates the replacement session right away.
+
+### 2026-08-03
+
+- The active project persists across restarts.
+- `claude_code.binary` must be an absolute path.
+- Restart and reload instructions for the services.
+
+### 2026-07-28
+
+- `/projects` shows just the name for projects under `project_root`.
+- The bridge reconnects with exponential backoff and fetches the current
+  WhatsApp protocol version at startup.
+- Baileys upgraded to `^7.0.0-rc14`.
+
+### 2026-07-27
+
+- `/create` makes a new project folder and switches to it.
+- `/c <text>` sends text to Claude Code verbatim.
+- Voice replies (`/voice on`), outgoing files (`whatsapp-outbox/`) and
+  reply/quote context.
+- Every folder under `project_root` is a project, discovered live.
+
+### 2026-07-26
+
+- First version: WhatsApp self-chat messages (text, voice notes, files) go to
+  Claude Code, and replies come back to WhatsApp.

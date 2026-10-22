@@ -36,6 +36,29 @@ class ClaudeCodeConfig:
     task_timeout_seconds: int = 900
 
 
+REMOTE_CONTROL_PERMISSION_MODES = (
+    "acceptEdits",
+    "auto",
+    "bypassPermissions",
+    "default",
+    "dontAsk",
+    "plan",
+)
+REMOTE_CONTROL_SPAWN_MODES = ("same-dir", "worktree")
+
+
+@dataclass(frozen=True)
+class RemoteControlConfig:
+    """Flags for the `claude remote-control` server each project gets on
+    /project (SPEC.md §7.7)."""
+
+    permission_mode: str = "bypassPermissions"
+    spawn: str = "same-dir"
+    # Claude in Chrome for spawned sessions. Off: browser work goes through
+    # the Playwright MCP plugin instead of the owner's real Chrome.
+    chrome: bool = False
+
+
 @dataclass(frozen=True)
 class WhisperConfig:
     model: str = "large-v3"
@@ -90,6 +113,7 @@ class Config:
     whatsapp: WhatsAppConfig
     projects: list[ProjectConfig] = field(default_factory=list)
     claude_code: ClaudeCodeConfig = field(default_factory=ClaudeCodeConfig)
+    remote_control: RemoteControlConfig = field(default_factory=RemoteControlConfig)
     whisper: WhisperConfig = field(default_factory=WhisperConfig)
     tts: TTSConfig = field(default_factory=TTSConfig)
     redis: RedisConfig = field(default_factory=RedisConfig)
@@ -141,6 +165,7 @@ def load_config(path: Path | None = None) -> Config:
             )
 
     claude_code_raw = raw.get("claude_code") or {}
+    remote_control = _parse_remote_control(raw.get("remote_control") or {})
     whisper_raw = raw.get("whisper") or {}
     tts_raw = raw.get("tts") or {}
     redis_raw = raw.get("redis") or {}
@@ -157,6 +182,7 @@ def load_config(path: Path | None = None) -> Config:
             binary=claude_code_raw.get("binary", "claude"),
             task_timeout_seconds=int(claude_code_raw.get("task_timeout_seconds", 900)),
         ),
+        remote_control=remote_control,
         whisper=WhisperConfig(
             model=whisper_raw.get("model", "large-v3"),
             device=whisper_raw.get("device", "cuda"),
@@ -213,3 +239,22 @@ def _parse_project_containers(raw: object, project_root: Path | None) -> tuple[s
             continue
         containers.append("/".join(parts))
     return tuple(containers)
+
+
+def _parse_remote_control(raw: dict) -> RemoteControlConfig:
+    permission_mode = str(raw.get("permission_mode", "bypassPermissions"))
+    if permission_mode not in REMOTE_CONTROL_PERMISSION_MODES:
+        raise ValueError(
+            f"config.remote_control.permission_mode must be one of "
+            f"{', '.join(REMOTE_CONTROL_PERMISSION_MODES)}; got {permission_mode!r}"
+        )
+    spawn = str(raw.get("spawn", "same-dir"))
+    if spawn not in REMOTE_CONTROL_SPAWN_MODES:
+        raise ValueError(
+            f"config.remote_control.spawn must be one of "
+            f"{', '.join(REMOTE_CONTROL_SPAWN_MODES)}; got {spawn!r}"
+        )
+    chrome = raw.get("chrome", False)
+    if not isinstance(chrome, bool):
+        raise ValueError(f"config.remote_control.chrome must be true or false; got {chrome!r}")
+    return RemoteControlConfig(permission_mode=permission_mode, spawn=spawn, chrome=chrome)

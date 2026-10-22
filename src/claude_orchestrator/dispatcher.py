@@ -22,6 +22,7 @@ from .models import IncomingMessage, OutgoingMessage
 from .projects import ProjectScan, render_listing, scan_project_root, sort_key
 from .outbox import MAX_FILE_SIZE_BYTES, collect_outgoing_files, content_hash8
 from .redis_client import RedisBus
+from .remote_control import LaunchResult, RemoteControl, session_name
 from .state import PersistedState, load_state, save_state
 from .transcription import Transcriber
 from .tts import Synthesizer
@@ -58,6 +59,21 @@ def _stage_into_inbox(source: Path, project_path: Path, timestamp: str) -> Path:
     dest = inbox / f"{timestamp}-{source.stem}_{content_hash8(source)}{source.suffix}"
     shutil.move(str(source), str(dest))
     return dest.relative_to(project_path)
+
+
+def _describe_launch(result: LaunchResult) -> str:
+    """One WhatsApp line for a /project or /create launch (SPEC.md §7.7)."""
+    url = f" {result.url}" if result.url else ""
+    if result.status == "started":
+        return f"🟢 {result.session} is live. Open the Code tab.{url}"
+    if result.status == "running":
+        return f"🟢 {result.session} is already live.{url}"
+    if result.status == "pending":
+        return (
+            f"⏳ {result.session} is still starting. Check /status in a moment.\n"
+            f"{result.detail}"
+        ).rstrip()
+    return f"❌ {result.session} failed to start:\n{result.detail}".rstrip()
 
 
 @dataclass
@@ -121,12 +137,14 @@ class Dispatcher:
         runner: ClaudeCodeRunner,
         transcriber: Transcriber,
         synthesizer: Synthesizer,
+        remote_control: RemoteControl,
     ) -> None:
         self._config = config
         self._bus = bus
         self._runner = runner
         self._transcriber = transcriber
         self._synthesizer = synthesizer
+        self._remote_control = remote_control
         self._projects: dict[str, ProjectState] = {
             p.name: ProjectState(config=p) for p in config.projects
         }
@@ -355,7 +373,8 @@ class Dispatcher:
                 )
                 return
             self._set_active_project(name)
-            await self._reply(f"✅ Switched to project '{name}'.", message)
+            live_line = await self._launch_remote_control(name)
+            await self._reply(f"✅ Switched to project '{name}'.\n{live_line}", message)
             return
 
         if command.name == "projects":
@@ -394,6 +413,10 @@ class Dispatcher:
             await state.invocation.cancel()
             return
 
+        if command.name == "close":
+            await self._handle_close(command, message)
+            return
+
         if command.name == "enable":
             self._state.claude_enabled = True
             save_state(self._state)
@@ -429,10 +452,12 @@ class Dispatcher:
             # the ID reliably resumes interactively — a /name'd title only
             # resolves in --print mode, not the interactive picker).
             session_label = state.session_id or "none yet"
+            live_label = ", ".join(await self._remote_control.running()) or "none"
             await self._reply(
                 f"{toggle_label}\nvoice replies: {voice_label}\n"
                 f"project: {self._active_project} ({busy_label})\n"
-                f"session: {session_label}",
+                f"session: {session_label}\n"
+                f"remote control: {live_label}",
                 message,
             )
             return
@@ -503,7 +528,33 @@ class Dispatcher:
         path.mkdir(parents=True)
         self._projects[name] = ProjectState(config=ProjectConfig(name=name, path=path))
         self._set_active_project(name)
-        await self._reply(f"✅ Created and switched to project '{name}' ({path}).", message)
+        live_line = await self._launch_remote_control(name)
+        await self._reply(
+            f"✅ Created and switched to project '{name}' ({path}).\n{live_line}", message
+        )
+
+    async def _launch_remote_control(self, name: str) -> str:
+        """Start the project's Remote Control server, unless it is already
+        live, and describe the outcome in one WhatsApp-ready line (SPEC.md
+        §7.7). The project switch stands whatever the outcome."""
+        result = await self._remote_control.launch(name, self._projects[name].config.path)
+        return _describe_launch(result)
+
+    async def _handle_close(self, command: Command, message: IncomingMessage) -> None:
+        name = self._active_project
+        if command.arg:
+            resolved = self._resolve_project_name(command.arg)
+            if resolved is None:
+                await self._reply(
+                    f"❌ Unknown project '{command.arg}'. Send /projects for the list.", message
+                )
+                return
+            name = resolved
+        session = session_name(name)
+        if await self._remote_control.close(name):
+            await self._reply(f"⚫ Closed {session}.", message)
+        else:
+            await self._reply(f"{session} was not running.", message)
 
     async def _handle_prompt(self, prompt: str, message: IncomingMessage) -> None:
         state = self._projects[self._active_project]

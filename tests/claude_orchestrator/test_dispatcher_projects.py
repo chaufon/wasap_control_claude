@@ -10,6 +10,7 @@ from claude_orchestrator.commands import Command
 from claude_orchestrator.config import Config, ProjectConfig, WhatsAppConfig
 from claude_orchestrator.dispatcher import Dispatcher
 from claude_orchestrator.models import IncomingMessage, OutgoingMessage
+from claude_orchestrator.remote_control import LaunchResult, session_name
 from claude_orchestrator.state import PersistedState
 
 if TYPE_CHECKING:
@@ -25,6 +26,28 @@ class FakeBus:
 
     async def publish_outgoing(self, message: OutgoingMessage) -> None:
         self.sent.append(message)
+
+
+class FakeRemoteControl:
+    def __init__(self) -> None:
+        self.live: set[str] = set()
+
+    async def launch(self, project_name: str, path: Path) -> LaunchResult:
+        session = session_name(project_name)
+        if session in self.live:
+            return LaunchResult("running", session)
+        self.live.add(session)
+        return LaunchResult("started", session, url="https://claude.ai/code?environment=x")
+
+    async def running(self) -> list[str]:
+        return sorted(self.live)
+
+    async def close(self, project_name: str) -> bool:
+        session = session_name(project_name)
+        if session not in self.live:
+            return False
+        self.live.remove(session)
+        return True
 
 
 @pytest.fixture
@@ -46,7 +69,8 @@ def _dispatcher(
         project_containers=containers,
     )
     bus = FakeBus()
-    return Dispatcher(config, bus, None, None, None), bus  # type: ignore[arg-type]
+    remote_control = FakeRemoteControl()
+    return Dispatcher(config, bus, None, None, None, remote_control), bus  # type: ignore[arg-type]
 
 
 def _run(dispatcher: Dispatcher, bus: FakeBus, name: str, arg: str | None = None) -> str:
@@ -78,9 +102,10 @@ def test_project_switches_to_nested_project_by_name_and_number(
     """A nested project can be selected by its relative path or its list number."""
     dispatcher, bus = _dispatcher(root, monkeypatch)
     assert _run(dispatcher, bus, "project", "c/car/maintenance") == (
-        "✅ Switched to project 'c/car/maintenance'."
+        "✅ Switched to project 'c/car/maintenance'.\n"
+        "🟢 rc-c-car-maintenance is live. Open the Code tab. https://claude.ai/code?environment=x"
     )
-    assert _run(dispatcher, bus, "project", "4") == "✅ Switched to project 'c/whey'."
+    assert _run(dispatcher, bus, "project", "4").startswith("✅ Switched to project 'c/whey'.\n")
 
 
 def test_project_on_container_lists_its_children(root: Path, monkeypatch: "MonkeyPatch") -> None:
@@ -125,3 +150,44 @@ def test_missing_container_logs_a_warning(
         dispatcher, bus = _dispatcher(root, monkeypatch, containers=("c", "gone"))
     assert "project container 'gone' not found" in caplog.text
     assert "gone" not in _run(dispatcher, bus, "projects")
+
+
+def test_project_twice_reuses_the_live_server(root: Path, monkeypatch: "MonkeyPatch") -> None:
+    """A second /project for the same project reports the server already live."""
+    dispatcher, bus = _dispatcher(root, monkeypatch)
+    _run(dispatcher, bus, "project", "c/whey")
+    assert _run(dispatcher, bus, "project", "c/whey") == (
+        "✅ Switched to project 'c/whey'.\n🟢 rc-c-whey is already live."
+    )
+
+
+def test_create_launches_the_server(root: Path, monkeypatch: "MonkeyPatch") -> None:
+    """/create starts the new project's server like /project does."""
+    dispatcher, bus = _dispatcher(root, monkeypatch)
+    assert "🟢 rc-c-newapp is live." in _run(dispatcher, bus, "create", "c/newapp")
+
+
+def test_close_defaults_to_the_active_project(root: Path, monkeypatch: "MonkeyPatch") -> None:
+    """/close with no argument closes the active project's server."""
+    dispatcher, bus = _dispatcher(root, monkeypatch)
+    _run(dispatcher, bus, "project", "c/whey")
+    assert _run(dispatcher, bus, "close") == "⚫ Closed rc-c-whey."
+    assert _run(dispatcher, bus, "close") == "rc-c-whey was not running."
+
+
+def test_close_by_name_and_unknown(root: Path, monkeypatch: "MonkeyPatch") -> None:
+    """/close accepts a project name, and rejects one it does not know."""
+    dispatcher, bus = _dispatcher(root, monkeypatch)
+    _run(dispatcher, bus, "project", "chaufon")
+    _run(dispatcher, bus, "project", "main")
+    assert _run(dispatcher, bus, "close", "chaufon") == "⚫ Closed rc-chaufon."
+    assert _run(dispatcher, bus, "close", "nope").startswith("❌ Unknown project 'nope'")
+
+
+def test_status_lists_live_servers(root: Path, monkeypatch: "MonkeyPatch") -> None:
+    """/status ends with the live Remote Control servers, or "none"."""
+    dispatcher, bus = _dispatcher(root, monkeypatch)
+    assert _run(dispatcher, bus, "status").endswith("remote control: none")
+    _run(dispatcher, bus, "project", "c/whey")
+    _run(dispatcher, bus, "project", "chaufon")
+    assert _run(dispatcher, bus, "status").endswith("remote control: rc-c-whey, rc-chaufon")
