@@ -4,29 +4,29 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 
-HELP_TEXT = (
-    "Available commands:\n"
-    "/project <name-or-number> — switch the active project and start its "
-    "Remote Control server, so it shows up in the Claude app's Code tab\n"
-    "/projects — list every available project (config.yaml plus every "
-    "folder under project_root), numbered, grouped by container\n"
-    "/create <name> | <container>/<name> — create a new project folder, "
-    "switch to it and start its Remote Control server\n"
-    "/close [name-or-number] — stop a project's Remote Control server "
-    "(the active project's if none given)\n"
-    "/new — start a fresh session for the active project\n"
-    "/stop — cancel the task currently running for the active project\n"
-    "/enable — allow messages to reach Claude Code\n"
-    "/disable — stop messages from reaching Claude Code (for personal notes/backups)\n"
-    "/status — show enabled/disabled state, active project, busy/idle, "
-    "session ID, and running Remote Control servers\n"
-    "/c <text> — send <text> to Claude Code verbatim, e.g. \"/c /usage\" or "
-    "\"/c /grill-me an idea\" (bypasses the commands above)\n"
-    "/voice on | off — also send replies as a voice note, in the reply's own "
-    "detected language (off by default)\n"
-    "/help — show this message\n"
-    "Anything else is sent to Claude Code as a prompt, unless disabled."
-)
+HELP_TEXT = """📋 *Commands*
+
+*Projects*
+• /projects — list every project, numbered, grouped by container
+• /project <name-or-number> — switch to a project and start its shared session
+• /create <name> | <container>/<name> — create a project folder and switch to it
+• /close [name-or-number] — stop a project's shared session (default: the active one)
+
+*Session*
+• /last — Claude's last answer in the active project, from any device
+• /stop — drop queued messages and interrupt the running turn
+• /status — state, active project, and every Remote Control session
+• /reconnect [name-or-number] — connect a session to the Claude app again
+
+*Settings*
+• /enable — let messages reach Claude Code
+• /disable — keep messages away from Claude Code (personal notes)
+• /voice on | off — also send replies as a voice note
+
+*Pass-through*
+• /c <text> — send <text> to the session as typed, e.g. /c /usage, /c /clear
+
+Anything else goes to the active project's session, unless disabled. The same session is open in the Claude app and on the computer."""
 
 
 @dataclass(frozen=True)

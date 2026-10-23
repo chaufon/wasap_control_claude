@@ -26,10 +26,10 @@ sudo apt install -y redis-server ffmpeg nodejs npm tmux
   `piper-tts` and `langdetect` are pulled in by `uv sync` below; voice models
   themselves download automatically on first `/voice on` use.
 - A logged-in Claude Code CLI session on this machine (`claude login`) under
-  the Pro subscription — the orchestrator shells out to `claude`, it never
-  uses an API key.
-- `tmux` (already listed above) hosts the Remote Control server `/project`
-  starts for each project (SPEC.md §7.7).
+  the Pro subscription — the orchestrator runs `claude`, it never uses an API
+  key.
+- `tmux` (already listed above) hosts each project's shared live session
+  (SPEC.md §7.7).
 - **Disable automatic suspend/sleep** in system power settings (screen
   lock/screensaver is fine — see SPEC.md §2).
 
@@ -79,13 +79,10 @@ Edit `~/.config/claude-orchestrator/config.yaml`:
   warning in the log. Restart the orchestrator after changing this list
   (SPEC.md §7.2).
 - `remote_control` — optional. `permission_mode` (default
-  `bypassPermissions`, so phone sessions never ask for approval, like the
-  WhatsApp `claude -p` path)
-  and `spawn` (default `same-dir`; `worktree` gives each new session its own
-  git worktree) and `chrome` (default `false`: no Claude in Chrome, so
-  browser work uses Playwright MCP) for the Remote Control server
-  `/project` starts (SPEC.md
-  §7.7).
+  `bypassPermissions`, so the session never asks for approval, whichever
+  device drives it) and `chrome` (default `false`: no Claude in Chrome, so
+  browser work uses Playwright MCP) for each project's shared live session
+  (SPEC.md §7.7).
 - `tts.voices` — maps a detected reply language to a Piper voice id
   (defaults: `en_US-ljspeech-high`, `es_AR-daniela-high`). Only used once you
   send `/voice on` (SPEC.md §7.4); any other detected language falls back to
@@ -175,18 +172,24 @@ In your "Message Yourself" WhatsApp chat:
   without a stray note accidentally becoming a command (SPEC.md §7.1).
   Disabled messages are simply left alone; your own WhatsApp history is
   the backup, nothing is copied elsewhere.
+- **One session, three devices.** Each project has one live Claude Code
+  session, shared by WhatsApp, the Claude app (Code tab, through Remote
+  Control) and your computer (`tmux attach -t rc-<name>`). Whatever you send
+  from one is part of the same conversation on the others. Only answers to
+  messages you sent from WhatsApp come back to WhatsApp (SPEC.md §4.4, §7.7).
 - `/project <name-or-number>` — switch active project, by name or by its
   number from `/projects`. Any project folder under `project_root` or one of
   its containers works immediately, with no separate registration step.
   `/project <container>` lists that container's projects (SPEC.md §7.2).
-  It also starts the project's Remote Control server, so the project shows
-  up in the Code tab of the Claude mobile app as a full Claude Code session.
-  The server starts through your login shell, so its sessions get the same
-  environment and settings as `claude` in a terminal. Claude in Chrome is
-  off for them, so browser work goes through the Playwright MCP plugin.
-  The reply says "🟢 rc-c-whey is live" with a claude.ai link once it's up;
-  a second `/project` reuses the running server. From the laptop,
-  `tmux attach -t rc-c-whey` opens the same server (SPEC.md §7.7).
+  It also starts the project's live session, and replies "📱 rc-c-whey is
+  live in the Claude app" with its claude.ai link, plus the
+  `tmux attach -t rc-c-whey` command that opens the same session in a
+  terminal on your computer. A second message previews
+  Claude's last answer in that project (200 characters). The session runs
+  through your login shell, so it gets the same environment and settings as
+  `claude` in a terminal, and resumes its last conversation when it starts
+  again. Claude in Chrome is off, so browser work goes through the
+  Playwright MCP plugin.
 - `/projects` — list every available project (config.yaml plus every
   `project_root` project folder), numbered. Each container is an unnumbered
   `📁` header with its projects indented under it. Shows just the name for anything under
@@ -196,31 +199,35 @@ In your "Message Yourself" WhatsApp chat:
   folder under `project_root` or inside one of its containers and switch to
   it (only if `project_root` is configured; the folder name allows letters,
   numbers, `-` and `_` — SPEC.md §7.2). Like `/project`, it starts the new
-  project's Remote Control server.
-- `/close [name-or-number]` — stop a project's Remote Control server (the
-  active project's when no argument is given). Servers keep running when you
+  project's live session.
+- `/close [name-or-number]` — stop a project's live session (the active
+  project's when no argument is given). Sessions keep running when you
   switch to another project, survive orchestrator restarts, and end on
-  reboot or logout (SPEC.md §7.7).
-- `/new` — reset the active project's Claude Code session.
-- `/stop` — cancel the task currently running for the active project.
+  reboot or logout; the next `/project` or WhatsApp message starts one
+  again (SPEC.md §7.7).
+- `/last` — Claude's full last answer in the active project, whichever
+  device the question came from.
+- `/stop` — drop your queued messages and interrupt the running turn (like
+  Esc at the keyboard). A message sent while the session is busy waits in a
+  queue and goes in once it's free ("⏳ Busy, queued").
+- `/reconnect [name-or-number]` — connect a session to the Claude app again,
+  e.g. after you archived it there. Archiving only disconnects the app; the
+  session keeps working for WhatsApp and the computer.
 - `/enable` / `/disable` — allow/stop messages from reaching Claude Code.
-- `/status` — enabled/disabled state, active project, busy/idle, the
-  active project's Claude Code session ID, and the running Remote Control
-  servers. Handy for continuing the same
-  conversation from a terminal later: `claude --resume <session ID>` from
-  that project's directory (a `/name`'d title only resolves in `--print`
-  mode, not the interactive picker, so the ID is the reliable way to resume
-  interactively).
-- `/c <text>` — send `<text>` to Claude Code verbatim as the prompt, e.g.
-  `/c /usage` or `/c /mattpocock-skills:grill-me an idea` — use this to reach
-  Claude Code's own commands/skills, which would otherwise be swallowed as an
-  unrecognized command above. Plugin skills need the fully-qualified
-  `plugin:skill` name (`/mattpocock-skills:grill-me`, not just `/grill-me`) —
-  Claude Code CLI itself replies "Unknown command" otherwise, same as it
-  would interactively; this isn't something `/c` can work around. While
-  disabled, `/c` (and any other unrecognized `/command`) replies "Claude Code
-  is disabled" instead of running — a leading `/` is never a personal note,
-  so unlike plain text it's never silently ignored (SPEC.md §7.1/§7.3).
+- `/status` — enabled/disabled state, voice replies, active project
+  (busy/idle/queued), its session ID, the `tmux attach` command to open it on
+  the computer, and every Remote Control session: 🟢 connected, 🟡 not
+  connected (with the `/reconnect` to send), 🔴 exited, ⚪ started outside
+  WhatsApp.
+- `/c <text>` — type `<text>` into the session as is, e.g. `/c /usage`,
+  `/c /grill-me an idea` or `/c /clear` — use this to reach Claude Code's own
+  commands/skills, which would otherwise be swallowed as an unrecognized
+  command above. Built-in commands like `/usage` reply with what they show on
+  screen; `/c /clear` starts a fresh conversation and replies "🧹 Session
+  cleared". While disabled, `/c` (and any other unrecognized `/command`)
+  replies "Claude Code is disabled" instead of running — a leading `/` is
+  never a personal note, so unlike plain text it's never silently ignored
+  (SPEC.md §7.1/§7.3).
 - `/voice on` / `/voice off` — also send each reply as a WhatsApp voice note,
   in addition to the text reply (off by default). The voice note speaks a
   short (~100 word) spoken-style summary of the answer rather than reading
@@ -231,9 +238,9 @@ In your "Message Yourself" WhatsApp chat:
 - `/help` — show the command list.
 - Claude Code can also send **you** a file (e.g. a generated PDF report):
   it just needs to save it into `<project>/whatsapp-outbox/` — it's told
-  about this convention automatically on every invocation, so you can simply
+  about this convention when its session starts, so you can simply
   ask it to "send me the report" and it'll know where to put it. Anything
-  placed there is delivered right after the reply, then archived into
+  placed there is delivered right after the reply to a WhatsApp message, then archived into
   `whatsapp-outbox/sent/` so it's never resent. Files over 64MB get a clear
   error instead of being sent. If the project is a git repo, `whatsapp-outbox/`
   is added to its `.gitignore` automatically the first time it's used
@@ -251,7 +258,7 @@ In your "Message Yourself" WhatsApp chat:
 
 ```
 SPEC.md                    full technical specification
-src/claude_orchestrator/   Python orchestrator (dispatcher, Claude Code CLI wrapper, Remote Control launcher, transcription, TTS, outgoing files, formatting, enable/disable state)
+src/claude_orchestrator/   Python orchestrator (dispatcher, shared live sessions, hook relay, transcription, TTS, outgoing files, formatting, enable/disable state)
 whatsapp-bridge/           Node.js/TypeScript Baileys <-> Redis bridge
 config/config.example.yaml config template (copy to ~/.config/claude-orchestrator/config.yaml)
 systemd/                   systemd --user unit files
@@ -260,6 +267,23 @@ systemd/                   systemd --user unit files
 ## Changelog
 
 Newest first. Details for each change are in SPEC.md and the git history.
+
+### 2026-10-23
+
+- WhatsApp, the Claude app and the computer share one live session per
+  project: WhatsApp messages are typed into the project's
+  `claude --remote-control` session in tmux, and answers come back through
+  Claude Code hooks. Only answers to WhatsApp messages are sent to WhatsApp.
+- Messages sent while the session is busy are queued; `/stop` drops the
+  queue and interrupts the running turn.
+- New `/last` and `/reconnect` commands. `/project` previews the last answer.
+- `/new` is gone: `/c /clear` starts a fresh conversation. `/c /usage` and
+  other built-in commands reply with what they show on screen.
+- `/status` shows the `tmux attach` command and every Remote Control session
+  with its state, including sessions started outside WhatsApp.
+- Replies use bullets; `/help` is grouped into sections.
+- `remote_control.spawn` is gone; new `redis.hooks_channel` (default
+  `claude:hooks`).
 
 ### 2026-10-22
 

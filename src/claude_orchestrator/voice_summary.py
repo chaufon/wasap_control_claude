@@ -1,6 +1,6 @@
 """Audio-summary marker convention for voice replies. When voice replies are
 enabled for a message, Claude Code is instructed (VOICE_SUMMARY_SYSTEM_PROMPT,
-wired in via claude_code.py) to end its reply with a "## 🔊 Audio Summary"
+added to that prompt by hook_relay.py) to end its reply with a "## 🔊 Audio Summary"
 heading followed by a short spoken-style summary. extract_voice_summary
 splits that section off the raw response so the text reply stays clean and
 the voice reply speaks only the summary.
@@ -11,8 +11,8 @@ from __future__ import annotations
 VOICE_SUMMARY_HEADING = "## 🔊 Audio Summary"
 VOICE_SUMMARY_WORD_CAP = 100
 
-# Passed as an extra --append-system-prompt fragment (claude_code.py), only
-# for messages where voice replies are enabled (dispatcher.py).
+# Added as UserPromptSubmit context (hook_relay.py), only for WhatsApp
+# messages sent while voice replies are enabled.
 VOICE_SUMMARY_SYSTEM_PROMPT = (
     "Voice replies are enabled for this message. After your full answer, "
     f'add a line containing exactly "{VOICE_SUMMARY_HEADING}" and nothing '

@@ -1,12 +1,12 @@
 """Persisted orchestrator state: on/off toggle, voice replies, active
-project, and each project's Claude Code session id.
+project, each project's shared session ID, and each project's last answer.
 
 The self-chat is also used for personal notes/backups (not just Claude Code
 commands), so routing is gated by this toggle rather than being always-on.
 Persisted across restarts so a deliberate /disable, /voice, /project switch,
 or in-progress conversation survives a service restart; a fresh install with
 no state file yet defaults to enabled, voice off, no active project
-override, and no remembered sessions.
+override, no remembered sessions and no answers.
 """
 
 from __future__ import annotations
@@ -30,9 +30,12 @@ class PersistedState:
     # None means no /project switch has been persisted yet — the dispatcher
     # falls back to config.default_project in that case.
     active_project: str | None = None
-    # project name -> Claude Code session id, so a restart resumes the same
-    # conversation instead of silently starting a fresh one.
-    session_ids: dict[str, str] = field(default_factory=dict)
+    # project name -> session ID of its shared live session (SPEC.md §7.7),
+    # so a session that is started again resumes the same conversation.
+    shared_sessions: dict[str, str] = field(default_factory=dict)
+    # project name -> Claude's latest answer in that session, whichever
+    # channel the prompt came from (/last, and the /project preview).
+    last_answers: dict[str, str] = field(default_factory=dict)
 
 
 def load_state(path: Path = STATE_PATH) -> PersistedState:
@@ -44,7 +47,8 @@ def load_state(path: Path = STATE_PATH) -> PersistedState:
             claude_enabled=bool(data.get("claude_enabled", True)),
             voice_enabled=bool(data.get("voice_enabled", False)),
             active_project=data.get("active_project"),
-            session_ids=dict(data.get("session_ids") or {}),
+            shared_sessions=dict(data.get("shared_sessions") or {}),
+            last_answers=dict(data.get("last_answers") or {}),
         )
     except (json.JSONDecodeError, OSError):
         logger.exception("failed to read state file %s; defaulting to enabled", path)

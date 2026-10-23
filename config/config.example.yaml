@@ -44,23 +44,20 @@ claude_code:
   # can resolve at some boots and fail at others. `which claude` prints the
   # current target.
   binary: /home/centos/.local/bin/claude
-  # Hard timeout per task; after this the process is killed and the
-  # request is treated as a failure (SPEC.md §5.7).
+  # Hard timeout per WhatsApp turn; after this the turn is interrupted and
+  # treated as a failure (SPEC.md §5.7).
   task_timeout_seconds: 900
 
-# Remote Control server that /project and /create start for each project, so
-# it shows up in the Claude app's Code tab (SPEC.md §7.7). Uses
+# Each project's shared live session (claude --remote-control in tmux),
+# used by WhatsApp, the Claude app and the computer (SPEC.md §7.7). Uses
 # claude_code.binary above. Needs tmux.
 remote_control:
   # acceptEdits | auto | bypassPermissions | default | dontAsk | plan.
-  # bypassPermissions never asks, like the claude -p path. auto asks about
-  # actions its safety check flags. default asks for every edit.
+  # bypassPermissions never asks. auto asks about actions its safety check
+  # flags. default asks for every edit.
   permission_mode: bypassPermissions
-  # same-dir: every session works in the project folder itself.
-  # worktree: each new session gets its own git worktree (git repos only).
-  spawn: same-dir
-  # Claude in Chrome for spawned sessions. false: browser work goes through
-  # the Playwright MCP plugin, not your real, logged-in Chrome.
+  # Claude in Chrome for the session. false: browser work goes through the
+  # Playwright MCP plugin, not your real, logged-in Chrome.
   chrome: false
 
 whisper:
@@ -89,6 +86,8 @@ redis:
   port: 6379
   incoming_channel: "whatsapp:incoming"
   outgoing_channel: "whatsapp:outgoing"
+  # Hook events from the live sessions (SPEC.md §6.3).
+  hooks_channel: "claude:hooks"
 
 progress_updates:
   interval_seconds: 10

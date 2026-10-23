@@ -1,18 +1,18 @@
-"""Entrypoint: wires config, Redis bus, Claude Code runner, transcriber,
-and dispatcher together, and runs the event loop (SPEC.md §10)."""
+"""Entrypoint: wires config, Redis bus, live sessions, transcriber,
+synthesizer and dispatcher together, and runs the event loop (SPEC.md §10)."""
 
 from __future__ import annotations
 
 import asyncio
 import logging
 import logging.handlers
+import sys
 from pathlib import Path
 
-from .claude_code import ClaudeCodeRunner
 from .config import load_config
 from .dispatcher import Dispatcher
 from .redis_client import RedisBus
-from .remote_control import RemoteControl
+from .live_session import LiveSessions
 from .transcription import Transcriber
 from .tts import Synthesizer
 
@@ -42,11 +42,18 @@ async def _main() -> None:
     _setup_logging()
     config = load_config()
     bus = RedisBus(config.redis)
-    runner = ClaudeCodeRunner(binary=config.claude_code.binary)
     transcriber = Transcriber(config.whisper)
     synthesizer = Synthesizer(config.tts, config.bridge.outgoing_staging_dir)
-    remote_control = RemoteControl(config.remote_control, config.claude_code.binary)
-    dispatcher = Dispatcher(config, bus, runner, transcriber, synthesizer, remote_control)
+    # The hook command each live session runs (hook_relay.py), with this
+    # same interpreter, so it finds this package and its redis client.
+    relay_command = [
+        sys.executable, "-m", "claude_orchestrator.hook_relay",
+        "--redis-host", config.redis.host,
+        "--redis-port", str(config.redis.port),
+        "--channel", config.redis.hooks_channel,
+    ]  # fmt: skip
+    live = LiveSessions(config.remote_control, config.claude_code.binary, relay_command)
+    dispatcher = Dispatcher(config, bus, transcriber, synthesizer, live)
 
     logger.info(
         "claude-orchestrator started; projects=%s default=%s",

@@ -5,85 +5,39 @@ from typing import TYPE_CHECKING
 
 import pytest
 
-from claude_orchestrator import dispatcher as dispatcher_module
 from claude_orchestrator.commands import Command
-from claude_orchestrator.config import Config, ProjectConfig, WhatsAppConfig
 from claude_orchestrator.dispatcher import Dispatcher
-from claude_orchestrator.models import IncomingMessage, OutgoingMessage
-from claude_orchestrator.remote_control import LaunchResult, session_name
+from claude_orchestrator.live_session import ProcessInfo
+from claude_orchestrator.models import IncomingMessage
 from claude_orchestrator.state import PersistedState
+
+from .conftest import FakeBus, MakeDispatcher
 
 if TYPE_CHECKING:
     from _pytest.logging import LogCaptureFixture
-    from _pytest.monkeypatch import MonkeyPatch
 
 MESSAGE = IncomingMessage(message_id="m1", timestamp="t", sender_jid="me", type="text", text="")
+LIVE_LINE = (
+    "📱 {session} is live in the Claude app: https://claude.ai/code/session_x\n"
+    "💻 On the computer: ```tmux attach -t {session}```"
+)
 
 
-class FakeBus:
-    def __init__(self) -> None:
-        self.sent: list[OutgoingMessage] = []
-
-    async def publish_outgoing(self, message: OutgoingMessage) -> None:
-        self.sent.append(message)
-
-
-class FakeRemoteControl:
-    def __init__(self) -> None:
-        self.live: set[str] = set()
-
-    async def launch(self, project_name: str, path: Path) -> LaunchResult:
-        session = session_name(project_name)
-        if session in self.live:
-            return LaunchResult("running", session)
-        self.live.add(session)
-        return LaunchResult("started", session, url="https://claude.ai/code?environment=x")
-
-    async def running(self) -> list[str]:
-        return sorted(self.live)
-
-    async def close(self, project_name: str) -> bool:
-        session = session_name(project_name)
-        if session not in self.live:
-            return False
-        self.live.remove(session)
-        return True
-
-
-@pytest.fixture
-def root(tmp_path: Path) -> Path:
-    for name in ("main", "chaufon", "c/fitnotes", "c/whey", "c/car/crash26", "c/car/maintenance"):
-        (tmp_path / name).mkdir(parents=True)
-    return tmp_path
-
-
-def _dispatcher(
-    root: Path, monkeypatch: "MonkeyPatch", containers: tuple[str, ...] = ("c", "c/car")
-) -> tuple[Dispatcher, FakeBus]:
-    monkeypatch.setattr(dispatcher_module, "load_state", lambda: PersistedState())
-    monkeypatch.setattr(dispatcher_module, "save_state", lambda state: None)
-    config = Config(
-        whatsapp=WhatsAppConfig(allowed_sender_jid="me"),
-        projects=[ProjectConfig(name="main", path=root / "main")],
-        project_root=root,
-        project_containers=containers,
-    )
-    bus = FakeBus()
-    remote_control = FakeRemoteControl()
-    return Dispatcher(config, bus, None, None, None, remote_control), bus  # type: ignore[arg-type]
+def _run_all(dispatcher: Dispatcher, bus: FakeBus, name: str, arg: str | None = None) -> list[str]:
+    bus.sent.clear()
+    asyncio.run(dispatcher._handle_command(Command(name=name, arg=arg), MESSAGE))
+    return bus.texts
 
 
 def _run(dispatcher: Dispatcher, bus: FakeBus, name: str, arg: str | None = None) -> str:
-    bus.sent.clear()
-    asyncio.run(dispatcher._handle_command(Command(name=name, arg=arg), MESSAGE))
-    return bus.sent[-1].text or ""
+    return _run_all(dispatcher, bus, name, arg)[-1]
 
 
-def test_projects_lists_containers_with_children(root: Path, monkeypatch: "MonkeyPatch") -> None:
+def test_projects_lists_containers_with_children(make_dispatcher: MakeDispatcher) -> None:
     """/projects shows containers as headers and their children numbered beneath them."""
-    dispatcher, bus = _dispatcher(root, monkeypatch)
+    dispatcher, bus, _ = make_dispatcher()
     assert _run(dispatcher, bus, "projects") == (
-        "Available projects:\n"
+        "📁 *Projects*\n"
         "📁 c\n"
         "  📁 c/car\n"
         "    1. c/car/crash26\n"
@@ -92,102 +46,183 @@ def test_projects_lists_containers_with_children(root: Path, monkeypatch: "Monke
         "  4. c/whey\n"
         "5. chaufon\n"
         "6. main\n\n"
-        "Active: main"
+        "▶️ Active: main"
     )
 
 
-def test_project_switches_to_nested_project_by_name_and_number(
-    root: Path, monkeypatch: "MonkeyPatch"
-) -> None:
+def test_project_switches_to_nested_project_by_name_and_number(make_dispatcher: MakeDispatcher) -> None:
     """A nested project can be selected by its relative path or its list number."""
-    dispatcher, bus = _dispatcher(root, monkeypatch)
+    dispatcher, bus, _ = make_dispatcher()
     assert _run(dispatcher, bus, "project", "c/car/maintenance") == (
-        "✅ Switched to project 'c/car/maintenance'.\n"
-        "🟢 rc-c-car-maintenance is live. Open the Code tab. https://claude.ai/code?environment=x"
+        "✅ Switched to project 'c/car/maintenance'.\n" + LIVE_LINE.format(session="rc-c-car-maintenance")
     )
     assert _run(dispatcher, bus, "project", "4").startswith("✅ Switched to project 'c/whey'.\n")
 
 
-def test_project_on_container_lists_its_children(root: Path, monkeypatch: "MonkeyPatch") -> None:
+def test_project_resumes_the_shared_session(make_dispatcher: MakeDispatcher) -> None:
+    """A project with a stored shared session starts by resuming it."""
+    dispatcher, bus, live = make_dispatcher(state=PersistedState(shared_sessions={"chaufon": "abc"}))
+    _run(dispatcher, bus, "project", "chaufon")
+    _run(dispatcher, bus, "project", "c/whey")
+    assert live.launches == [("chaufon", "abc"), ("c/whey", None)]
+
+
+def test_project_sends_a_preview_of_the_last_answer(make_dispatcher: MakeDispatcher) -> None:
+    """After the switch, a second message previews the project's last answer in 200 characters."""
+    answer = "**Done.** " + "word " * 100 + "\n## 🔊 Audio Summary\nspoken"
+    dispatcher, bus, _ = make_dispatcher(state=PersistedState(last_answers={"chaufon": answer}))
+    switched, preview = _run_all(dispatcher, bus, "project", "chaufon")
+    assert switched.startswith("✅ Switched to project 'chaufon'.")
+    body = preview.split("\n")[1]
+    assert preview.startswith("💬 *Last answer:*\n**Done.** word word")
+    assert len(body) <= 201 and body.endswith("…")
+    assert preview.endswith("\n\nSend /last for all of it.")
+    assert len(_run_all(dispatcher, bus, "project", "c/whey")) == 1
+
+
+def test_project_on_container_lists_its_children(make_dispatcher: MakeDispatcher) -> None:
     """Selecting a container replies with its subtree instead of switching."""
-    dispatcher, bus = _dispatcher(root, monkeypatch)
+    dispatcher, bus, _ = make_dispatcher()
     assert _run(dispatcher, bus, "project", "c/car") == (
         "📁 c/car is a folder of projects. Pick one:\n1. c/car/crash26\n2. c/car/maintenance"
     )
     assert dispatcher._active_project == "main"
 
 
-def test_create_inside_container(root: Path, monkeypatch: "MonkeyPatch") -> None:
-    """/create <container>/<name> makes the folder and switches to it."""
-    dispatcher, bus = _dispatcher(root, monkeypatch)
+def test_create_inside_container(root: Path, make_dispatcher: MakeDispatcher) -> None:
+    """/create <container>/<name> makes the folder, switches to it and starts its session."""
+    dispatcher, bus, _ = make_dispatcher()
     reply = _run(dispatcher, bus, "create", "c/car/newapp")
     assert reply.startswith("✅ Created and switched to project 'c/car/newapp'")
+    assert reply.endswith(LIVE_LINE.format(session="rc-c-car-newapp"))
     assert (root / "c" / "car" / "newapp").is_dir()
 
 
-def test_create_rejects_parent_that_is_not_a_container(
-    root: Path, monkeypatch: "MonkeyPatch"
-) -> None:
+def test_create_rejects_parent_that_is_not_a_container(root: Path, make_dispatcher: MakeDispatcher) -> None:
     """/create refuses a parent folder that is not a listed container."""
-    dispatcher, bus = _dispatcher(root, monkeypatch)
+    dispatcher, bus, _ = make_dispatcher()
     reply = _run(dispatcher, bus, "create", "chaufon/sub")
     assert reply == "❌ 'chaufon' is not a project container. Containers: c, c/car."
     assert not (root / "chaufon" / "sub").exists()
 
 
 @pytest.mark.parametrize("arg", ["../escape", "c/../x", "c/.hidden", "c/"])
-def test_create_rejects_unsafe_names(root: Path, monkeypatch: "MonkeyPatch", arg: str) -> None:
+def test_create_rejects_unsafe_names(make_dispatcher: MakeDispatcher, arg: str) -> None:
     """/create refuses traversal, hidden and empty folder names."""
-    dispatcher, bus = _dispatcher(root, monkeypatch)
+    dispatcher, bus, _ = make_dispatcher()
     assert _run(dispatcher, bus, "create", arg).startswith("❌")
 
 
-def test_missing_container_logs_a_warning(
-    root: Path, monkeypatch: "MonkeyPatch", caplog: "LogCaptureFixture"
-) -> None:
+def test_missing_container_logs_a_warning(make_dispatcher: MakeDispatcher, caplog: "LogCaptureFixture") -> None:
     """A configured container with no folder is skipped with a warning at startup."""
     with caplog.at_level(logging.WARNING):
-        dispatcher, bus = _dispatcher(root, monkeypatch, containers=("c", "gone"))
+        dispatcher, bus, _ = make_dispatcher(containers=("c", "gone"))
     assert "project container 'gone' not found" in caplog.text
     assert "gone" not in _run(dispatcher, bus, "projects")
 
 
-def test_project_twice_reuses_the_live_server(root: Path, monkeypatch: "MonkeyPatch") -> None:
-    """A second /project for the same project reports the server already live."""
-    dispatcher, bus = _dispatcher(root, monkeypatch)
+def test_project_twice_reuses_the_live_session(make_dispatcher: MakeDispatcher) -> None:
+    """A second /project for the same project reports the session already live."""
+    dispatcher, bus, _ = make_dispatcher()
     _run(dispatcher, bus, "project", "c/whey")
     assert _run(dispatcher, bus, "project", "c/whey") == (
-        "✅ Switched to project 'c/whey'.\n🟢 rc-c-whey is already live."
+        "✅ Switched to project 'c/whey'.\n"
+        "📱 rc-c-whey is already live in the Claude app: https://claude.ai/code/session_x\n"
+        "💻 On the computer: ```tmux attach -t rc-c-whey```"
     )
 
 
-def test_create_launches_the_server(root: Path, monkeypatch: "MonkeyPatch") -> None:
-    """/create starts the new project's server like /project does."""
-    dispatcher, bus = _dispatcher(root, monkeypatch)
-    assert "🟢 rc-c-newapp is live." in _run(dispatcher, bus, "create", "c/newapp")
-
-
-def test_close_defaults_to_the_active_project(root: Path, monkeypatch: "MonkeyPatch") -> None:
-    """/close with no argument closes the active project's server."""
-    dispatcher, bus = _dispatcher(root, monkeypatch)
+def test_close_defaults_to_the_active_project(make_dispatcher: MakeDispatcher) -> None:
+    """/close with no argument closes the active project's session."""
+    dispatcher, bus, _ = make_dispatcher()
     _run(dispatcher, bus, "project", "c/whey")
     assert _run(dispatcher, bus, "close") == "⚫ Closed rc-c-whey."
-    assert _run(dispatcher, bus, "close") == "rc-c-whey was not running."
+    assert _run(dispatcher, bus, "close") == "⚪ rc-c-whey was not running."
 
 
-def test_close_by_name_and_unknown(root: Path, monkeypatch: "MonkeyPatch") -> None:
+def test_close_by_name_and_unknown(make_dispatcher: MakeDispatcher) -> None:
     """/close accepts a project name, and rejects one it does not know."""
-    dispatcher, bus = _dispatcher(root, monkeypatch)
+    dispatcher, bus, _ = make_dispatcher()
     _run(dispatcher, bus, "project", "chaufon")
     _run(dispatcher, bus, "project", "main")
     assert _run(dispatcher, bus, "close", "chaufon") == "⚫ Closed rc-chaufon."
     assert _run(dispatcher, bus, "close", "nope").startswith("❌ Unknown project 'nope'")
 
 
-def test_status_lists_live_servers(root: Path, monkeypatch: "MonkeyPatch") -> None:
-    """/status ends with the live Remote Control servers, or "none"."""
-    dispatcher, bus = _dispatcher(root, monkeypatch)
-    assert _run(dispatcher, bus, "status").endswith("remote control: none")
+def test_status_without_sessions(make_dispatcher: MakeDispatcher) -> None:
+    """/status lists its fields as bullets, and "none" under Remote Control."""
+    dispatcher, bus, _ = make_dispatcher()
+    assert _run(dispatcher, bus, "status") == (
+        "📊 *Status*\n"
+        "• Claude Code: 🟢 enabled\n"
+        "• Voice replies: 🔇 off\n"
+        "• Project: main (idle)\n"
+        "• Session: none yet\n"
+        "\n"
+        "📱 *Remote Control*\n"
+        "◦ none"
+    )
+
+
+def test_status_shows_every_session_state(root: Path, make_dispatcher: MakeDispatcher) -> None:
+    """/status marks connected, unconnected, exited and outside sessions, and drops the exited one."""
+    dispatcher, bus, live = make_dispatcher()
     _run(dispatcher, bus, "project", "c/whey")
     _run(dispatcher, bus, "project", "chaufon")
-    assert _run(dispatcher, bus, "status").endswith("remote control: rc-c-whey, rc-chaufon")
+    live.register("rc-chaufon", busy=True, connected=False)
+    live.panes["rc-gone"] = "dead"
+    live.outside.append(
+        ProcessInfo(pid=2, session_id="t", cwd=root / "main", busy=False, bridge_session_id="s", tmux_session=None)
+    )
+    assert _run(dispatcher, bus, "status") == (
+        "📊 *Status*\n"
+        "• Claude Code: 🟢 enabled\n"
+        "• Voice replies: 🔇 off\n"
+        "• Project: chaufon (busy)\n"
+        "• Session: id-rc-chaufon\n"
+        "• On the computer: ```tmux attach -t rc-chaufon```\n"
+        "\n"
+        "📱 *Remote Control*\n"
+        "◦ 🟢 rc-c-whey: connected, idle\n"
+        "◦ 🟡 rc-chaufon: not connected to the app · /reconnect chaufon\n"
+        "◦ 🔴 rc-gone: exited (Connection lost)\n"
+        "◦ ⚪ main: started outside WhatsApp"
+    )
+    assert "rc-gone" not in live.panes
+
+
+def test_reconnect(make_dispatcher: MakeDispatcher) -> None:
+    """/reconnect types /remote-control into an unconnected session, and leaves a connected one alone."""
+    dispatcher, bus, live = make_dispatcher()
+    assert _run(dispatcher, bus, "reconnect") == "❌ rc-main is not running. Send /project main to start it."
+    _run(dispatcher, bus, "project", "main")
+    assert _run(dispatcher, bus, "reconnect") == "📱 rc-main is already connected: https://claude.ai/code/session_x"
+    live.register("rc-main", connected=False)
+
+    original = live.send_text
+
+    async def send_and_connect(session: str, text: str) -> bool:
+        live.register(session)
+        return await original(session, text)
+
+    live.send_text = send_and_connect  # type: ignore[method-assign]
+    assert _run(dispatcher, bus, "reconnect") == "📱 Reconnected rc-main: https://claude.ai/code/session_x"
+    assert live.typed == [("rc-main", "/remote-control")]
+
+
+def test_last(make_dispatcher: MakeDispatcher) -> None:
+    """/last sends the full last answer without its audio summary, or says there is none."""
+    dispatcher, bus, _ = make_dispatcher(state=PersistedState(last_answers={"main": "All **done**.\n## 🔊 Audio Summary\nok"}))
+    assert _run(dispatcher, bus, "last") == "💬 *Last answer:*\nAll *done*."
+    _run(dispatcher, bus, "project", "chaufon")
+    assert _run(dispatcher, bus, "last") == "💬 No answer yet in 'chaufon'."
+
+
+def test_help_is_grouped() -> None:
+    """/help groups the commands under section headings, one bullet each."""
+    from claude_orchestrator.commands import HELP_TEXT
+
+    for heading in ("*Projects*", "*Session*", "*Settings*", "*Pass-through*"):
+        assert heading in HELP_TEXT
+    assert "/new" not in HELP_TEXT
+    assert "• /last" in HELP_TEXT and "• /reconnect" in HELP_TEXT

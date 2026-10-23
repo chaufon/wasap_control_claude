@@ -44,17 +44,15 @@ REMOTE_CONTROL_PERMISSION_MODES = (
     "dontAsk",
     "plan",
 )
-REMOTE_CONTROL_SPAWN_MODES = ("same-dir", "worktree")
 
 
 @dataclass(frozen=True)
 class RemoteControlConfig:
-    """Flags for the `claude remote-control` server each project gets on
-    /project (SPEC.md §7.7)."""
+    """Flags for each project's live `claude --remote-control` session
+    (SPEC.md §7.7)."""
 
     permission_mode: str = "bypassPermissions"
-    spawn: str = "same-dir"
-    # Claude in Chrome for spawned sessions. Off: browser work goes through
+    # Claude in Chrome for the session. Off: browser work goes through
     # the Playwright MCP plugin instead of the owner's real Chrome.
     chrome: bool = False
 
@@ -73,6 +71,8 @@ class RedisConfig:
     port: int = 6379
     incoming_channel: str = "whatsapp:incoming"
     outgoing_channel: str = "whatsapp:outgoing"
+    # Hook events from the live sessions (hook_relay.py).
+    hooks_channel: str = "claude:hooks"
 
 
 @dataclass(frozen=True)
@@ -204,6 +204,7 @@ def load_config(path: Path | None = None) -> Config:
         redis=RedisConfig(
             host=redis_raw.get("host", "127.0.0.1"),
             port=int(redis_raw.get("port", 6379)),
+            hooks_channel=redis_raw.get("hooks_channel", "claude:hooks"),
         ),
         progress_updates=ProgressUpdatesConfig(
             interval_seconds=int(progress_raw.get("interval_seconds", 10)),
@@ -248,13 +249,7 @@ def _parse_remote_control(raw: dict) -> RemoteControlConfig:
             f"config.remote_control.permission_mode must be one of "
             f"{', '.join(REMOTE_CONTROL_PERMISSION_MODES)}; got {permission_mode!r}"
         )
-    spawn = str(raw.get("spawn", "same-dir"))
-    if spawn not in REMOTE_CONTROL_SPAWN_MODES:
-        raise ValueError(
-            f"config.remote_control.spawn must be one of "
-            f"{', '.join(REMOTE_CONTROL_SPAWN_MODES)}; got {spawn!r}"
-        )
     chrome = raw.get("chrome", False)
     if not isinstance(chrome, bool):
         raise ValueError(f"config.remote_control.chrome must be true or false; got {chrome!r}")
-    return RemoteControlConfig(permission_mode=permission_mode, spawn=spawn, chrome=chrome)
+    return RemoteControlConfig(permission_mode=permission_mode, chrome=chrome)
