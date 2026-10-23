@@ -25,7 +25,9 @@ OUTBOX_SYSTEM_PROMPT = (
     "individual files under 64MB. Don't use this folder for anything else."
 )
 
-_GITIGNORE_ENTRY = "whatsapp-outbox/"
+# Keeps the folder out of git on its own, so the project's own .gitignore
+# is never touched. Never sent.
+_GITIGNORE = ".gitignore"
 
 
 def content_hash8(path: Path) -> str:
@@ -48,17 +50,10 @@ class OutboxResult:
     oversized: list[tuple[Path, int]]
 
 
-def _ensure_gitignored(project_path: Path) -> None:
-    if not (project_path / ".git").is_dir():
-        return
-    gitignore = project_path / ".gitignore"
-    existing = gitignore.read_text(encoding="utf-8") if gitignore.exists() else ""
-    if _GITIGNORE_ENTRY in existing.splitlines():
-        return
-    with gitignore.open("a", encoding="utf-8") as fh:
-        if existing and not existing.endswith("\n"):
-            fh.write("\n")
-        fh.write(f"{_GITIGNORE_ENTRY}\n")
+def _ensure_self_ignored(outbox: Path) -> None:
+    gitignore = outbox / _GITIGNORE
+    if not gitignore.exists():
+        gitignore.write_text("*\n", encoding="utf-8")
 
 
 def collect_outgoing_files(project_path: Path) -> OutboxResult:
@@ -69,14 +64,14 @@ def collect_outgoing_files(project_path: Path) -> OutboxResult:
     if not outbox.is_dir():
         return OutboxResult(sent=[], oversized=[])
 
-    _ensure_gitignored(project_path)
+    _ensure_self_ignored(outbox)
 
     sent_dir = outbox / "sent"
     sent: list[OutboxFile] = []
     oversized: list[tuple[Path, int]] = []
 
     for entry in sorted(outbox.iterdir()):
-        if not entry.is_file():
+        if not entry.is_file() or entry.name == _GITIGNORE:
             continue
         size = entry.stat().st_size
         if size > MAX_FILE_SIZE_BYTES:

@@ -19,7 +19,8 @@ if TYPE_CHECKING:
 MESSAGE = IncomingMessage(message_id="m1", timestamp="t", sender_jid="me", type="text", text="")
 LIVE_LINE = (
     "📱 {session} is live in the Claude app: https://claude.ai/code/session_x\n"
-    "💻 On the computer: ```tmux attach -t {session}```"
+    "🖥️ On the computer: ```tmux attach -t {session}```\n"
+    "🚪 To leave, close the terminal window or tab; /exit ends the session"
 )
 
 
@@ -128,7 +129,8 @@ def test_project_twice_reuses_the_live_session(make_dispatcher: MakeDispatcher) 
     assert _run(dispatcher, bus, "project", "c/whey") == (
         "✅ Switched to project 'c/whey'.\n"
         "📱 rc-c-whey is already live in the Claude app: https://claude.ai/code/session_x\n"
-        "💻 On the computer: ```tmux attach -t rc-c-whey```"
+        "🖥️ On the computer: ```tmux attach -t rc-c-whey```\n"
+        "🚪 To leave, close the terminal window or tab; /exit ends the session"
     )
 
 

@@ -187,7 +187,8 @@ def test_a_dead_session_restarts_by_resuming(make_dispatcher: MakeDispatcher) ->
     assert bus.texts[0] == (
         "♻️ Session restarted.\n"
         "📱 rc-main is live in the Claude app: https://claude.ai/code/session_x\n"
-        "💻 On the computer: ```tmux attach -t rc-main```"
+        "🖥️ On the computer: ```tmux attach -t rc-main```\n"
+        "🚪 To leave, close the terminal window or tab; /exit ends the session"
     )
     assert bus.texts[-1] == "hello"
 

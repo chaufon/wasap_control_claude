@@ -86,8 +86,12 @@ def _attach_command(session: str) -> str:
 
 def _describe_launch(result: LaunchResult) -> str:
     """The WhatsApp lines for a live-session launch: where the session is
-    in the Claude app, and how to open it on the computer (SPEC.md §7.7)."""
-    computer = f"💻 On the computer: {_attach_command(result.session)}"
+    in the Claude app, and how to open and leave it on the computer
+    (SPEC.md §7.7)."""
+    computer = (
+        f"🖥️ On the computer: {_attach_command(result.session)}\n"
+        "🚪 To leave, close the terminal window or tab; /exit ends the session"
+    )
     if result.status in ("started", "running") and result.url:
         verb = "is live" if result.status == "started" else "is already live"
         return f"📱 {result.session} {verb} in the Claude app: {result.url}\n{computer}"

@@ -184,7 +184,8 @@ In your "Message Yourself" WhatsApp chat:
   It also starts the project's live session, and replies "📱 rc-c-whey is
   live in the Claude app" with its claude.ai link, plus the
   `tmux attach -t rc-c-whey` command that opens the same session in a
-  terminal on your computer. A second message previews
+  terminal on your computer. To leave it, close the terminal window or tab:
+  the session keeps running. `/exit` ends the session. A second message previews
   Claude's last answer in that project (200 characters). The session runs
   through your login shell, so it gets the same environment and settings as
   `claude` in a terminal, and resumes its last conversation when it starts
@@ -242,8 +243,8 @@ In your "Message Yourself" WhatsApp chat:
   ask it to "send me the report" and it'll know where to put it. Anything
   placed there is delivered right after the reply to a WhatsApp message, then archived into
   `whatsapp-outbox/sent/` so it's never resent. Files over 64MB get a clear
-  error instead of being sent. If the project is a git repo, `whatsapp-outbox/`
-  is added to its `.gitignore` automatically the first time it's used
+  error instead of being sent. The first time it's used, `whatsapp-outbox/`
+  gets its own `.gitignore` containing `*`, so it stays out of git
   (SPEC.md §7.5).
 - WhatsApp's own **reply** (quote) feature works too: replying to an earlier
   message — text, an attachment, or a voice note, in either direction — adds
