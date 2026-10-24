@@ -37,3 +37,6 @@ dump.rdb
 # Scratch folder for sharing debugging screenshots mid-conversation, not
 # project documentation.
 design/
+
+# Machine-specific agent rules.
+CLAUDE.local.md
