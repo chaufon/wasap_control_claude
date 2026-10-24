@@ -2,7 +2,7 @@
 
 from collections.abc import Callable
 from pathlib import Path
-from typing import TYPE_CHECKING
+from typing import TYPE_CHECKING, TypeAlias
 
 import pytest
 
@@ -118,7 +118,7 @@ def root(tmp_path: Path) -> Path:
     return tmp_path
 
 
-type MakeDispatcher = Callable[..., tuple[Dispatcher, FakeBus, FakeLive]]
+MakeDispatcher: TypeAlias = Callable[..., tuple[Dispatcher, FakeBus, FakeLive]]
 
 
 @pytest.fixture
