@@ -33,9 +33,10 @@ cd wasap_control_claude
 ./install.sh
 ```
 
-Run it as your normal user. The script asks for root only when system
-packages are missing: it then prints the exact `sudo ./install.sh` command to
-run and exits. Under `sudo`, everything except the system packages and linger
+Run it as your normal user. The script needs root only to install missing
+system packages, and to turn linger on or off when `loginctl` refuses to do it
+without root. In both cases it prints the exact `sudo ./install.sh` command to
+run and exits with code 3. Under `sudo`, everything except the system packages and linger
 runs as the user who called `sudo`. Plain root (no `sudo`) installs for root,
 with `permission_mode: auto`.
 
@@ -81,7 +82,8 @@ pairing, rewrites the units and restarts the services.
 
 Exit codes: `0` done, `2` bad flag, `3` root is needed (run the printed
 `sudo` command), `4` unsupported system (install the printed packages
-yourself), `78` a check or a step failed.
+yourself), `78` a check or a step failed. `--uninstall` and `--purge` cannot
+be combined with `--check` or `--login-only` (exit code 2).
 
 ## Configure
 
@@ -125,13 +127,23 @@ If the orchestrator exits with code 78 (missing `claude`, `tmux` or `ffmpeg`,
 `bypassPermissions` as root, or a second orchestrator on the same socket),
 systemd does not restart it. Fix the cause in the log, then restart it.
 
-After 10 failed reconnects to WhatsApp the bridge stops. Start it again with
-`systemctl --user start whatsapp-bridge.service` once the network is back.
+After 10 failed reconnects to WhatsApp the bridge exits, and systemd does not
+restart it. Start it again with `systemctl --user start whatsapp-bridge.service`
+once the network is back.
 
-To pair again (for example after WhatsApp logged the device out): stop the
-bridge, delete `~/.local/share/whatsapp-bridge/auth`, run
-`node dist/index.js --pair` in `bridge/` with the Node binary from the
-`ExecStart=` line of `whatsapp-bridge.service`, then start the bridge.
+To pair again (for example after WhatsApp logged the device out):
+
+1. Stop the bridge: `systemctl --user stop whatsapp-bridge.service`. The
+   service and `--pair` must never use the auth folder at the same time.
+2. Delete `~/.local/share/whatsapp-bridge/auth`.
+3. In `bridge/`, run `node dist/index.js --pair` with the Node binary from the
+   `ExecStart=` line of `whatsapp-bridge.service`. Scan the QR code. It prints
+   `PAIRED <jid>` and does not change the config.
+4. If you paired a different number, set `whatsapp.allowed_sender_jid` to the
+   printed `<jid>`, or run
+   `orchestrator/.venv/bin/python -m claude_orchestrator.install_config set-sender --path ~/.config/claude-orchestrator/config.yaml --jid <jid>`.
+5. Restart both services:
+   `systemctl --user restart claude-orchestrator.service whatsapp-bridge.service`.
 
 ## Using it
 
