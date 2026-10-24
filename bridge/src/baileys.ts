@@ -15,12 +15,13 @@ import makeWASocket, {
   getContentType,
   isLidUser,
   jidNormalizedUser,
-  useMultiFileAuthState,
   type WAMessage,
   type WASocket,
 } from '@whiskeysockets/baileys';
 import pino from 'pino';
 import qrcodeTerminal from 'qrcode-terminal';
+import { AuthWriteTracker } from './auth-drain.js';
+import { useAtomicMultiFileAuthState } from './auth-state.js';
 import type { BridgeConfig } from './config.js';
 import type { IncomingEvent } from './events.js';
 import type { SocketBus } from './socket.js';
@@ -320,25 +321,64 @@ interface OwnIdentity {
   lid: string;
 }
 
+/**
+ * Opens the auth state in `authDir` with every credentials save and key
+ * operation tracked, so `tracker.drain()` can wait for all of them.
+ */
+async function openTrackedAuthState(authDir: string) {
+  const { state, saveCreds } = await useAtomicMultiFileAuthState(authDir);
+  const tracker = new AuthWriteTracker((err, kind) => {
+    logger.error({ err }, `failed to save WhatsApp auth ${kind}`);
+  });
+  const auth = { creds: state.creds, keys: tracker.wrapKeys(state.keys) };
+  return { auth, tracker, saveCreds };
+}
+
 export async function startBridge(config: BridgeConfig, bus: SocketBus): Promise<void> {
   await mkdir(config.authDir, { recursive: true });
   await mkdir(config.stagingDir, { recursive: true });
   await mkdir(config.outgoingStagingDir, { recursive: true });
 
-  const { state, saveCreds } = await useMultiFileAuthState(config.authDir);
+  const { auth, tracker, saveCreds } = await openTrackedAuthState(config.authDir);
   const { version } = await fetchLatestBaileysVersion();
 
-  let socket: WASocket;
+  let socket: WASocket | undefined;
   let me: OwnIdentity = { pn: '', lid: '' };
+  let shuttingDown = false;
   const reconnectBackoff = new ReconnectBackoff();
 
+  // Ends the WhatsApp connection, waits for pending auth state writes, closes
+  // the orchestrator socket, and exits: 0 when every write finished, 1 when
+  // a write failed or the drain timed out.
+  const shutdown = async (reason: string): Promise<void> => {
+    if (shuttingDown) return;
+    shuttingDown = true;
+    logger.info({ reason }, 'shutting down');
+    let exitCode = 0;
+    try {
+      await socket?.end(undefined);
+      await tracker.drain();
+    } catch (err) {
+      logger.error({ err }, 'auth state writes did not complete before exit');
+      exitCode = 1;
+    }
+    await bus.close().catch(() => undefined);
+    process.exit(exitCode);
+  };
+
+  process.once('SIGTERM', () => void shutdown('SIGTERM'));
+  process.once('SIGINT', () => void shutdown('SIGINT'));
+
   const connect = (): void => {
-    socket = makeWASocket({ auth: state, logger, version });
+    if (shuttingDown) return;
+    const current = makeWASocket({ auth, logger, version });
+    socket = current;
 
-    socket.ev.on('creds.update', saveCreds);
+    current.ev.on('creds.update', () => tracker.saveCreds(saveCreds));
 
-    socket.ev.on('connection.update', (update) => {
+    current.ev.on('connection.update', (update) => {
       const { connection, lastDisconnect, qr } = update;
+      if (shuttingDown) return;
 
       if (qr) {
         logger.info('scan this QR code with WhatsApp on your phone (Linked Devices):');
@@ -347,8 +387,8 @@ export async function startBridge(config: BridgeConfig, bus: SocketBus): Promise
 
       if (connection === 'open') {
         me = {
-          pn: socket.user?.id ? jidNormalizedUser(socket.user.id) : '',
-          lid: socket.user?.lid ? jidNormalizedUser(socket.user.lid) : '',
+          pn: current.user?.id ? jidNormalizedUser(current.user.id) : '',
+          lid: current.user?.lid ? jidNormalizedUser(current.user.lid) : '',
         };
         logger.info({ me }, 'connected to WhatsApp');
         reconnectBackoff.onConnectionOpen();
@@ -367,17 +407,18 @@ export async function startBridge(config: BridgeConfig, bus: SocketBus): Promise
             `giving up after ${RECONNECT_MAX_ATTEMPTS} failed reconnect attempts without a stable ` +
               'connection; run `systemctl --user start whatsapp-bridge.service` once the issue clears',
           );
-          process.exit(0);
+          void shutdown('reconnect attempts exhausted');
+          return;
         }
         logger.warn({ delayMs }, 'reconnecting');
         setTimeout(connect, delayMs);
       }
     });
 
-    socket.ev.on('messages.upsert', ({ messages, type }) => {
+    current.ev.on('messages.upsert', ({ messages, type }) => {
       if (type !== 'notify') return; // ignore historical-sync replays, only live messages
       for (const msg of messages) {
-        handleMessage(socket, msg, me, config, bus).catch((err: unknown) => {
+        handleMessage(current, msg, me, config, bus).catch((err: unknown) => {
           logger.error({ err, messageId: msg.key.id }, 'failed to handle incoming message');
         });
       }
@@ -389,7 +430,7 @@ export async function startBridge(config: BridgeConfig, bus: SocketBus): Promise
   // Registered once, outside connect(), so reconnects don't stack up
   // duplicate subscriptions; it always sends through the latest socket.
   await bus.onOutgoing(async (event) => {
-    if (!me.pn) {
+    if (!me.pn || !socket) {
       logger.warn('dropping outgoing message: not yet connected to WhatsApp');
       return;
     }
@@ -431,30 +472,37 @@ export function phoneJidOf(user: { id: string; phoneNumber?: string } | undefine
 
 /**
  * Connects to WhatsApp (showing a QR code on stderr when the auth state is
- * not paired yet), prints `PAIRED <jid>` as the only stdout line, closes the
- * socket without logging out, and resolves. Rejects on a fatal close.
+ * not paired yet), closes the socket without logging out, waits for every
+ * pending auth state write, then prints `PAIRED <jid>` as the only stdout
+ * line and resolves. Rejects, without printing, on a fatal close, a failed
+ * auth state write, or a drain that does not finish in time.
  */
 export async function runPairing(config: BridgeConfig): Promise<void> {
   await mkdir(config.authDir, { recursive: true });
-  const { state, saveCreds } = await useMultiFileAuthState(config.authDir);
+  const { auth, tracker, saveCreds } = await openTrackedAuthState(config.authDir);
   const { version } = await fetchLatestBaileysVersion();
 
-  await new Promise<void>((resolve, reject) => {
+  const jid = await new Promise<string>((resolve, reject) => {
     let attempts = 0;
     let settled = false;
-    // Credential writes are serialized and flushed before the process exits,
-    // so an in-flight write can never leave a truncated creds.json behind.
-    let pendingSave: Promise<void> = Promise.resolve();
+
+    // Ends the socket (no events follow), then waits for pending writes.
+    const finish = async (socket: WASocket, outcome: () => string): Promise<void> => {
+      settled = true;
+      try {
+        await socket.end(undefined); // never logout(), which unpairs
+        await tracker.drain();
+        resolve(outcome());
+      } catch (err) {
+        reject(err);
+      }
+    };
 
     const connect = (): void => {
-      const socket = makeWASocket({ auth: state, logger, version });
-      socket.ev.on('creds.update', () => {
-        pendingSave = pendingSave.then(() => saveCreds()).catch((err: unknown) => {
-          logger.error({ err }, 'failed to save credentials');
-        });
-      });
+      const socket = makeWASocket({ auth, logger, version });
+      socket.ev.on('creds.update', () => tracker.saveCreds(saveCreds));
 
-      socket.ev.on('connection.update', async (update) => {
+      socket.ev.on('connection.update', (update) => {
         const { connection, lastDisconnect, qr } = update;
         if (settled) return;
 
@@ -466,30 +514,23 @@ export async function runPairing(config: BridgeConfig): Promise<void> {
         }
 
         if (connection === 'open') {
-          const jid = phoneJidOf(socket.user);
-          settled = true;
-          await pendingSave;
-          if (!jid) {
-            socket.end(undefined);
-            reject(new Error('connected, but WhatsApp did not expose a phone-number JID'));
-            return;
-          }
-          process.stdout.write(`PAIRED ${jid}\n`);
-          socket.end(undefined); // closes the connection; never logout(), which unpairs
-          resolve();
+          const pn = phoneJidOf(socket.user);
+          void finish(socket, () => {
+            if (!pn) throw new Error('connected, but WhatsApp did not expose a phone-number JID');
+            return pn;
+          });
         } else if (connection === 'close') {
           const statusCode = (lastDisconnect?.error as Boom | undefined)?.output?.statusCode;
           logger.warn({ statusCode }, 'connection closed before pairing completed');
           attempts += 1;
           if (statusCode === DisconnectReason.loggedOut || attempts >= PAIR_MAX_CONNECT_ATTEMPTS) {
-            settled = true;
-            reject(
-              new Error(
+            void finish(socket, () => {
+              throw new Error(
                 statusCode === DisconnectReason.loggedOut
                   ? 'WhatsApp logged this device out; delete the auth directory and pair again'
                   : `could not connect to WhatsApp (last status code: ${statusCode})`,
-              ),
-            );
+              );
+            });
             return;
           }
           setTimeout(connect, PAIR_RETRY_DELAY_MS);
@@ -499,4 +540,6 @@ export async function runPairing(config: BridgeConfig): Promise<void> {
 
     connect();
   });
+
+  process.stdout.write(`PAIRED ${jid}\n`);
 }
