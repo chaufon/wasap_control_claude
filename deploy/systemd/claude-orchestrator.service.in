@@ -5,7 +5,7 @@ Description=Claude Code orchestrator (WhatsApp remote control)
 Type=simple
 WorkingDirectory=@REPO@/orchestrator
 @ENVIRONMENT@
-ExecStart=@REPO@/orchestrator/.venv/bin/claude-orchestrator
+ExecStart="@REPO@/orchestrator/.venv/bin/claude-orchestrator"
 Restart=on-failure
 RestartSec=5
 RestartPreventExitStatus=78

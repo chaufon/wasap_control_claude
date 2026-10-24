@@ -18,10 +18,11 @@ BASH = shutil.which("bash")
 REPO = Path(__file__).resolve().parents[2]
 TEMPLATES = REPO / "deploy" / "systemd"
 SENDER = "15550001@s.whatsapp.net"
+CURRENT_USER = subprocess.run(["id", "-un"], capture_output=True, text=True).stdout.strip()
 UTILITIES = [
     "sh", "bash", "env", "cat", "mkdir", "rm", "cp", "mv", "grep", "sed",
     "awk", "mktemp", "dirname", "basename", "uname", "tee", "chmod", "cut",
-    "tail", "head", "id", "tr", "sort", "ls", "touch", "readlink",
+    "tail", "head", "id", "tr", "sort", "ls", "touch", "readlink", "sleep",
 ]
 
 FAKES = {
@@ -42,6 +43,8 @@ log node "$@"
 for a in "$@"; do
     if [ "$a" = --pair ]; then
         echo "QR code here" >&2
+        [ "${FAKE_PAIR:-}" = fail ] && exit 1
+        [ "${FAKE_PAIR:-}" = silent ] && exit 0
         echo "PAIRED $FAKE_SENDER"
     fi
 done
@@ -109,6 +112,9 @@ class Env:
         self.bin = tmp_path / "bin"
         self.sysbin = tmp_path / "sysbin"
         self.log = tmp_path / "calls.log"
+        self.runtime = tmp_path / "run-user"
+        (self.runtime / "1000").mkdir(parents=True)
+        (self.runtime / "1000" / "bus").touch()
         for d in (self.home, self.tmpdir, self.state, self.bin, self.sysbin):
             d.mkdir()
         self._copy_repo()
@@ -197,6 +203,8 @@ class Env:
             "FAKE_SENDER": SENDER,
             "OS_RELEASE_FILE": str(REPO / "deploy" / "tests" / "fixtures" / "os-release" / "ubuntu"),
             "CURRENT_EUID": euid,
+            "USER_RUNTIME_ROOT": str(self.runtime),
+            "USER_BUS_TIMEOUT": "1",
             "LANG": "C",
         }
         env.update(self.extra_env)
@@ -246,21 +254,21 @@ def render(template, repo, node, environment):
 # --- render_unit -----------------------------------------------------------
 
 
-@pytest.mark.parametrize("environment", ["Environment=LD_LIBRARY_PATH=/a/lib:/b/lib", ""])
+@pytest.mark.parametrize("environment", ['Environment="LD_LIBRARY_PATH=/a/lib:/b/lib"', ""])
 @pytest.mark.parametrize("name", ["claude-orchestrator.service.in", "whatsapp-bridge.service.in"])
 def test_render_unit_substitutes_all_placeholders(name, environment):
     text = render(TEMPLATES / name, "/srv/my repo", "/opt/node/bin/node", environment)
     assert "@" not in text
     assert "RestartPreventExitStatus=78" in text
     if name.startswith("claude-orchestrator"):
-        assert "ExecStart=/srv/my repo/orchestrator/.venv/bin/claude-orchestrator" in text
+        assert 'ExecStart="/srv/my repo/orchestrator/.venv/bin/claude-orchestrator"' in text
         if environment:
             assert environment + "\n" in text
         else:
             assert "LD_LIBRARY_PATH" not in text
             assert "\n\nExecStart" not in text
     else:
-        assert "ExecStart=/opt/node/bin/node dist/index.js" in text
+        assert 'ExecStart="/opt/node/bin/node" dist/index.js' in text
         assert "WorkingDirectory=/srv/my repo/bridge" in text
 
 
@@ -395,7 +403,7 @@ def test_fresh_install_asks_project_root_and_pairs(env):
     unit = (env.unit_dir / "claude-orchestrator.service").read_text()
     assert "@" not in unit and "LD_LIBRARY_PATH" not in unit
     bridge = (env.unit_dir / "whatsapp-bridge.service").read_text()
-    assert f"ExecStart={env.bin / 'node'} dist/index.js" in bridge
+    assert 'ExecStart="%s" dist/index.js' % (env.bin / "node") in bridge
     assert "loginctl enable-linger" in " ".join(env.calls("loginctl"))
 
 
@@ -452,7 +460,7 @@ def test_gpu_installs_cuda_extra_and_sets_library_path(env):
     except ImportError:
         dirs = []
     if dirs:
-        assert "Environment=LD_LIBRARY_PATH=" + ":".join(dirs) + "\n" in unit
+        assert 'Environment="LD_LIBRARY_PATH=' + ":".join(dirs) + '"\n' in unit
     else:
         assert "LD_LIBRARY_PATH" not in unit
     assert "@" not in unit
@@ -463,6 +471,7 @@ def test_old_system_node_uses_private_node(env):
     private = env.home / ".local" / "share" / "claude-orchestrator" / "node" / "bin"
     private.mkdir(parents=True)
     shutil.copy2(env.bin / "node", private / "node")
+    shutil.copy2(env.bin / "npm", private / "npm")
     env.make_venv()
     env.write_config()
     # The private copy reports the same fake version unless told otherwise.
@@ -472,7 +481,7 @@ def test_old_system_node_uses_private_node(env):
     result = env.run()
     assert result.returncode == 0, result.stderr
     bridge = (env.unit_dir / "whatsapp-bridge.service").read_text()
-    assert f"ExecStart={private / 'node'} dist/index.js" in bridge
+    assert 'ExecStart="%s" dist/index.js' % (private / "node") in bridge
 
 
 def test_not_logged_in_runs_login_then_continues(env):
@@ -505,6 +514,10 @@ def test_login_only_disables_linger(env):
     loginctl = env.calls("loginctl")
     assert any(c.startswith("loginctl disable-linger ") for c in loginctl)
     assert not any("enable-linger" in c for c in loginctl)
+    log = env.calls()
+    disable = next(i for i, c in enumerate(log) if c.startswith("loginctl disable-linger"))
+    restart = next(i for i, c in enumerate(log) if c.startswith("systemctl") and " restart " in c)
+    assert restart < disable
 
 
 def test_linger_failure_without_root_exits_3(env):
@@ -601,3 +614,128 @@ def test_install_sh_parses_under_bash_posix():
         [BASH, "--posix", "-n", str(REPO / "install.sh")], capture_output=True, text=True
     )
     assert result.returncode == 0, result.stderr
+
+
+# --- fix round 1 -----------------------------------------------------------
+
+
+def test_render_unit_keeps_ampersand_in_paths():
+    text = render(TEMPLATES / "whatsapp-bridge.service.in", "/home/a&b", "/opt/n&de/node", "")
+    assert "WorkingDirectory=/home/a&b/bridge" in text
+    assert 'ExecStart="/opt/n&de/node" dist/index.js' in text
+
+
+def test_render_unit_escapes_percent():
+    text = render(
+        TEMPLATES / "claude-orchestrator.service.in", "/srv/50%", "/n", 'Environment="X=/srv/50%/lib"'
+    )
+    assert "WorkingDirectory=/srv/50%%/orchestrator" in text
+    assert 'ExecStart="/srv/50%%/orchestrator/.venv/bin/claude-orchestrator"' in text
+    assert 'Environment="X=/srv/50%%/lib"' in text
+
+
+@pytest.mark.parametrize("bad", ['/srv/a"b', "/srv/a\\b", "/srv/$HOME", "/srv/a\nb"])
+def test_render_unit_rejects_unsupported_characters(bad):
+    script = f'source "{REPO / "deploy" / "install" / "systemd.sh"}"\nrender_unit "$1" "$2" /n ""\n'
+    result = subprocess.run(
+        [BASH, "-c", script, "bash", str(TEMPLATES / "whatsapp-bridge.service.in"), bad],
+        capture_output=True, text=True,
+    )
+    assert result.returncode == 1
+    assert result.stdout == ""
+    assert "Unsupported character" in result.stderr
+
+
+def test_unsupported_node_path_exits_78(env):
+    env.make_venv()
+    env.write_config()
+    odd = env.root / "n$ode"
+    odd.mkdir()
+    shutil.copy2(env.bin / "node", odd / "node")
+    shutil.copy2(env.bin / "npm", odd / "npm")
+    env.extra_env["PATH"] = f"{odd}:{env.bin}:{env.sysbin}"
+    result = env.run()
+    assert result.returncode == 78
+    assert "Unsupported character" in result.stderr
+    assert not any(" restart " in c for c in env.calls("systemctl"))
+
+
+def test_linger_enabled_before_first_systemctl_call(env):
+    env.make_venv()
+    env.write_config()
+    result = env.run()
+    assert result.returncode == 0, result.stderr
+    log = env.calls()
+    linger = log.index(f"loginctl enable-linger {CURRENT_USER}")
+    first_systemctl = next(i for i, c in enumerate(log) if c.startswith("systemctl"))
+    assert linger < first_systemctl
+
+
+def test_user_manager_timeout_exits_78(env):
+    env.make_venv()
+    env.write_config()
+    (env.runtime / "1000" / "bus").unlink()
+    result = env.run()
+    assert result.returncode == 78
+    assert "user manager" in result.stderr
+    assert "loginctl enable-linger" in " ".join(env.calls("loginctl"))
+    assert env.calls("systemctl") == []
+
+
+def test_user_manager_private_socket_is_enough(env):
+    env.make_venv()
+    env.write_config()
+    (env.runtime / "1000" / "bus").unlink()
+    (env.runtime / "1000" / "systemd").mkdir()
+    (env.runtime / "1000" / "systemd" / "private").touch()
+    assert env.run().returncode == 0
+
+
+def test_systemctl_gets_xdg_runtime_dir_when_unset(env):
+    env.add_fake("systemctl", 'log systemctl "XDG=$XDG_RUNTIME_DIR" "$@"')
+    env.make_venv()
+    env.write_config()
+    result = env.run()
+    assert result.returncode == 0, result.stderr
+    uid = str(os.getuid())
+    calls = env.calls("systemctl")
+    assert calls and all(c.startswith(f"systemctl XDG={env.runtime}/{uid} --user") for c in calls)
+
+
+def test_system_node_without_npm_uses_private_node(env):
+    env.make_venv()
+    env.write_config()
+    bare = env.root / "bare-node"
+    bare.mkdir()
+    shutil.copy2(env.bin / "node", bare / "node")
+    env.extra_env["PATH"] = f"{bare}:{env.bin}:{env.sysbin}"
+    private = env.home / ".local" / "share" / "claude-orchestrator" / "node" / "bin"
+    private.mkdir(parents=True)
+    shutil.copy2(env.bin / "node", private / "node")
+    shutil.copy2(env.bin / "npm", private / "npm")
+    result = env.run()
+    assert result.returncode == 0, result.stderr
+    bridge = (env.unit_dir / "whatsapp-bridge.service").read_text()
+    assert 'ExecStart="%s" dist/index.js' % (private / "node") in bridge
+
+
+def test_system_node_without_npm_and_no_private_node_installs_one(env):
+    env.make_venv()
+    env.write_config()
+    env.remove_fake("npm")
+    result = env.run()
+    # The fake curl fails, so the private Node download fails loudly.
+    assert result.returncode == 78
+    assert "Could not install Node" in result.stderr
+
+
+@pytest.mark.parametrize("mode", ["fail", "silent"])
+def test_pairing_failure_exits_78(env, mode):
+    env.make_venv()
+    env.write_config(sender=None)
+    env.extra_env["FAKE_PAIR"] = mode
+    result = env.run()
+    assert result.returncode == 78
+    assert "pairing" in result.stderr
+    assert "allowed_sender_jid: " + SENDER not in env.config.read_text()
+    assert env.calls("loginctl") == []

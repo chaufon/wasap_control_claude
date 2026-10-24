@@ -21,7 +21,8 @@ Steps: system packages (ffmpeg, tmux, curl; needs root), Node >= 20, uv and
 Claude Code (with `claude auth login` when needed), Python and Node
 dependencies, the config file (~/.config/claude-orchestrator/config.yaml,
 never overwritten), WhatsApp pairing (QR code, only when no sender is
-configured), the systemd user units, and linger.
+configured), linger, and the systemd user units. The repo and Node paths may
+contain spaces but not `"`, `\` or `$`.
 
 Flags:
   --check       Report what would be done; render the config and the units
@@ -191,12 +192,13 @@ fi
 
 # --- 3. Node, uv, Claude Code ------------------------------------------------
 
-# Print the path of a node binary with major version >= NODE_MIN_MAJOR: the
-# system one, else the private one.
+# Print the path of a node binary with major version >= NODE_MIN_MAJOR and an
+# npm next to it: the system one, else the private one.
 find_node() {
     local candidate major
     for candidate in "$(command -v node 2>/dev/null || true)" "$PRIVATE_NODE_DIR/bin/node"; do
         [ -n "$candidate" ] && [ -x "$candidate" ] || continue
+        [ -x "$(dirname "$candidate")/npm" ] || continue
         major=$(node_major "$candidate")
         if [ -n "$major" ] && [ "$major" -ge "$NODE_MIN_MAJOR" ]; then
             printf '%s\n' "$candidate"
@@ -327,7 +329,7 @@ except ImportError:
 dirs = sorted(d for p in nvidia.__path__ for d in glob.glob(os.path.join(p, "*", "lib")))
 print(":".join(dirs))
 ' 2>/dev/null) || dirs=""
-    [ -z "$dirs" ] || printf 'Environment=LD_LIBRARY_PATH=%s\n' "$dirs"
+    [ -z "$dirs" ] || printf 'Environment="LD_LIBRARY_PATH=%s"\n' "$dirs"
 }
 
 # --- --check: render into a temp folder and stop ----------------------------
@@ -388,13 +390,23 @@ else
     say "WhatsApp: paired with $sender"
 fi
 
-# --- 7. systemd user units ----------------------------------------------------
+# --- 7. Linger and the user manager ------------------------------------------
+
+if [ "$LOGIN_ONLY" = 0 ]; then
+    if ! enable_linger_systemd "$TARGET_USER"; then
+        is_root && die 78 "loginctl enable-linger $TARGET_USER failed"
+        need_root "Turning on linger for $TARGET_USER needs root."
+    fi
+    say "Linger: on (the services run from boot)"
+fi
+wait_user_manager_systemd "$TARGET_USER" \
+    || die 78 "The systemd user manager of $TARGET_USER is not running (no /run/user/<uid>/bus). Log in as $TARGET_USER, or run without --login-only, then run ./install.sh again."
+
+# --- 8. systemd user units ----------------------------------------------------
 
 install_units_systemd "$REPO" "$NODE" "$(cuda_environment)" \
     || die 78 "Could not install or start the services"
 say "Services: claude-orchestrator and whatsapp-bridge started"
-
-# --- 8. Linger ---------------------------------------------------------------
 
 if [ "$LOGIN_ONLY" = 1 ]; then
     if ! disable_linger_systemd "$TARGET_USER"; then
@@ -402,12 +414,6 @@ if [ "$LOGIN_ONLY" = 1 ]; then
         need_root "Turning off linger for $TARGET_USER needs root."
     fi
     say "Linger: off (the services run only while $TARGET_USER is logged in)"
-else
-    if ! enable_linger_systemd "$TARGET_USER"; then
-        is_root && die 78 "loginctl enable-linger $TARGET_USER failed"
-        need_root "Turning on linger for $TARGET_USER needs root."
-    fi
-    say "Linger: on (the services run from boot)"
 fi
 
 say "Done."
