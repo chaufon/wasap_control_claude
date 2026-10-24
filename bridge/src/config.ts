@@ -1,4 +1,4 @@
-// Reads the same config.yaml the Python orchestrator uses (SPEC.md §8),
+// Reads the same config.yaml the Python orchestrator uses,
 // plus a `bridge` section for settings specific to this process.
 
 import { existsSync, readFileSync } from 'node:fs';

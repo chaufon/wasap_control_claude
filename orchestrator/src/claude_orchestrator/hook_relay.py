@@ -1,7 +1,6 @@
 """Claude Code hook command for the live sessions (live_session.py): reads
 one hook event from stdin and writes it to the orchestrator's socket as one
-`hook` frame (socket_bus.py), tagged with the tmux session it came from
-(SPEC.md §7.7).
+`hook` frame (socket_bus.py), tagged with the tmux session it came from.
 
 On UserPromptSubmit it also consumes the session's pending marker: the
 orchestrator writes one right before typing a WhatsApp message, so the

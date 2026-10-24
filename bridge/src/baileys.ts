@@ -1,4 +1,4 @@
-// WhatsApp connection + self-chat message handling (SPEC.md §4.1, §5).
+// WhatsApp connection + self-chat message handling.
 //
 // Only messages in the owner's own "Message Yourself" chat are ever
 // forwarded to the orchestrator — every other chat and group is filtered out here,
@@ -137,7 +137,7 @@ const NO_QUOTE: QuotedInfo = {
   quoted_media_type_label: null,
 };
 
-// WhatsApp's reply/quote feature (SPEC.md §5.9/§7.6): contextInfo.quotedMessage
+// WhatsApp's reply/quote feature: contextInfo.quotedMessage
 // embeds the quoted content's own metadata (and, for media, everything
 // needed to re-download it) directly in this message's event — no lookup
 // against anything the bridge saw earlier is needed.
@@ -172,7 +172,7 @@ async function resolveQuotedContext(
         remoteJid: msg.key.remoteJid,
         id: contextInfo?.stanzaId ?? undefined,
         participant: contextInfo?.participant ?? undefined,
-        // Self-chat: every message here is "from me" either way (SPEC.md §4.1).
+        // Self-chat: every message here is "from me" either way.
         fromMe: true,
       },
       message: quoted,
@@ -229,7 +229,7 @@ async function handleMessage(
   const isSelfChat = Boolean(me.pn) && (remoteJid === me.pn || remoteJid === me.lid);
   if (!isSelfChat) return; // not the self-chat: ignore entirely
 
-  // Defense-in-depth (SPEC.md §4.1, §9): confirm WhatsApp itself attributes
+  // Defense-in-depth: confirm WhatsApp itself attributes
   // this message to the account owner. `participant` is unreliable here —
   // WhatsApp sends `""` (not absent) for self-chat messages — so `fromMe`
   // is the robust signal.

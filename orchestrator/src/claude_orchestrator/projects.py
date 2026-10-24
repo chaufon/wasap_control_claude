@@ -1,4 +1,4 @@
-"""Project discovery under project_root and its containers (SPEC.md §7.2)."""
+"""Project discovery under project_root and its containers."""
 
 from __future__ import annotations
 

@@ -1,5 +1,5 @@
 """Entrypoint: wires config, socket bus, live sessions, transcriber,
-synthesizer and dispatcher together, and runs the event loop (SPEC.md §10)."""
+synthesizer and dispatcher together, and runs the event loop."""
 
 from __future__ import annotations
 

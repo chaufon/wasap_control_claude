@@ -24,13 +24,13 @@ STATE_PATH = Path.home() / ".local" / "share" / "claude-orchestrator" / "state.j
 @dataclass
 class PersistedState:
     claude_enabled: bool = True
-    # Opt-in (SPEC.md §7.4): voice replies are extra synthesis work per
+    # Opt-in: voice replies are extra synthesis work per
     # message, so unlike claude_enabled this defaults to off.
     voice_enabled: bool = False
     # None means no /project switch has been persisted yet — the dispatcher
     # falls back to config.default_project in that case (or has none).
     active_project: str | None = None
-    # project name -> session ID of its shared live session (SPEC.md §7.7),
+    # project name -> session ID of its shared live session,
     # so a session that is started again resumes the same conversation.
     shared_sessions: dict[str, str] = field(default_factory=dict)
     # project name -> Claude's latest answer in that session, whichever

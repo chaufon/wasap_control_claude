@@ -1,4 +1,4 @@
-"""Local text-to-speech for voice replies via Piper (SPEC.md §4.6, §7.4).
+"""Local text-to-speech for voice replies via Piper.
 
 Runs on CPU by default: Piper is fast enough without a GPU, and staying off
 the GPU avoids VRAM contention with a CUDA faster-whisper model.

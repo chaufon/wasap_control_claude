@@ -1,341 +1,220 @@
 # Claude Code Remote Control via WhatsApp
 
-Implementation of [`SPEC.md`](./SPEC.md). See that document for the full
-design and rationale; this file only covers setup and running it.
+Control Claude Code on your computer from WhatsApp. You write to your own
+"Message Yourself" chat: text, voice notes or files. Each message goes to a
+Claude Code session for the active project, and the answer comes back to the
+chat. The same session is open in the Claude app (Remote Control) and in a
+terminal on your computer (`tmux attach`).
 
-## Prerequisites
+Two processes run as systemd user services: a Node bridge linked to WhatsApp,
+and a Python orchestrator that runs the Claude Code sessions. See
+[`docs/architecture.md`](docs/architecture.md) for how they fit together.
 
-```bash
-sudo apt update
-sudo apt install -y redis-server ffmpeg nodejs npm tmux
-```
+## Requirements
 
-- **Node.js ≥ 20** (already present on this machine).
-- **Python ≥ 3.11** with [`uv`](https://docs.astral.sh/uv/).
-- **GPU-accelerated `faster-whisper`** needs CUDA/cuDNN libraries loadable at
-  runtime. `faster-whisper`/`ctranslate2`, plus the `nvidia-cublas-cu12`/
-  `nvidia-cudnn-cu12` pip wheels that provide those libraries, are all pulled
-  in by `uv sync` below — no system-wide CUDA install is required. The
-  systemd unit (`systemd/claude-orchestrator.service`) sets `LD_LIBRARY_PATH`
-  to the venv's `nvidia/cublas/lib` and `nvidia/cudnn/lib` directories so
-  those wheel-provided libraries are found at process start; if they aren't
-  importable at runtime the transcriber automatically falls back to CPU
-  (SPEC.md §4.3).
-- `ffmpeg` (already listed above) is also used to convert synthesized voice
-  replies to the Opus/OGG format WhatsApp voice notes require (SPEC.md §7.4).
-  `piper-tts` and `langdetect` are pulled in by `uv sync` below; voice models
-  themselves download automatically on first `/voice on` use.
-- A logged-in Claude Code CLI session on this machine (`claude login`) under
-  the Pro subscription — the orchestrator runs `claude`, it never uses an API
-  key.
-- `tmux` (already listed above) hosts each project's shared live session
-  (SPEC.md §7.7).
-- **Disable automatic suspend/sleep** in system power settings (screen
-  lock/screensaver is fine — see SPEC.md §2).
+- Linux with systemd.
+- A Claude subscription. The sessions use your Claude Code login, never an
+  API key.
+- A phone with WhatsApp.
+
+The installer gets everything else: `ffmpeg`, `tmux` and `curl` from your
+distro (`apt`, `dnf`, `pacman` or `zypper`), Node 20 or newer, `uv`, Claude
+Code, and the Python and Node dependencies. With a working `nvidia-smi` it
+also installs the CUDA libraries, so voice notes are transcribed on the GPU.
+
+Turn off automatic suspend: the services cannot answer while the computer
+sleeps.
 
 ## Install
 
 ```bash
-# Python orchestrator
-uv sync
-
-# Node WhatsApp bridge
-cd whatsapp-bridge
-npm install
-npm run build
-cd ..
+git clone https://github.com/chaufon/wasap_control_claude.git
+cd wasap_control_claude
+./install.sh
 ```
+
+Run it as your normal user. The script asks for root only when system
+packages are missing: it then prints the exact `sudo ./install.sh` command to
+run and exits. Under `sudo`, everything except the system packages and linger
+runs as the user who called `sudo`. Plain root (no `sudo`) installs for root,
+with `permission_mode: auto`.
+
+The script:
+
+1. Installs missing system packages, Node, `uv` and Claude Code. If Claude
+   Code is not logged in, it runs `claude auth login`.
+2. Installs the Python and Node dependencies and builds the bridge.
+3. Asks for the folder that holds your projects (`project_root`, default
+   `~/projects`) and writes `~/.config/claude-orchestrator/config.yaml`. An
+   existing config is kept; the script lists keys that are missing from it
+   or obsolete.
+4. Pairs WhatsApp when no sender is configured: scan the QR code with
+   WhatsApp > Linked devices. Your number is written to the config.
+5. Turns on linger, so the services run from boot.
+6. Writes, enables and starts `claude-orchestrator.service` and
+   `whatsapp-bridge.service`.
+
+Run `./install.sh` again after `git pull`. It keeps the config and the
+pairing, rewrites the units and restarts the services.
+
+## Flags
+
+```
+--check       Report what would be done; render the config and the units
+              into a temp folder and print their paths. Writes no config,
+              no units, runs no systemctl or loginctl, installs no Python or
+              Node dependencies and does not pair. As root it still installs
+              missing system packages, Node, uv and Claude Code, because
+              they are needed to check the rest; as a normal user it only
+              reports them.
+--login-only  Run the services only while the user is logged in (disables
+              linger). By default linger is enabled, so the services run
+              from boot.
+--uninstall   Stop and disable both services and delete their unit files.
+              Keeps the config and the data folders.
+--purge       Implies --uninstall. After one [y/N] confirmation, also
+              deletes ~/.config/claude-orchestrator,
+              ~/.local/share/whatsapp-bridge and
+              ~/.local/share/claude-orchestrator.
+--help        Show this help.
+```
+
+Exit codes: `0` done, `2` bad flag, `3` root is needed (run the printed
+`sudo` command), `4` unsupported system (install the printed packages
+yourself), `78` a check or a step failed.
 
 ## Configure
 
-```bash
-mkdir -p ~/.config/claude-orchestrator
-cp config/config.example.yaml ~/.config/claude-orchestrator/config.yaml
-```
-
-Edit `~/.config/claude-orchestrator/config.yaml`:
-
-- `whatsapp.allowed_sender_jid` — leave it as-is for the first run. WhatsApp
-  gives your account two addresses — a phone-number JID
-  (`...@s.whatsapp.net`) and a LID JID (`...@lid`) — and which one a given
-  self-chat message arrives under depends on which client sent it (the
-  phone app addresses it via LID, WhatsApp Desktop/Web via the phone-number
-  JID; the bridge accepts messages addressed either way, see SPEC.md §4.1).
-  `allowed_sender_jid` itself only needs the **phone-number JID** (`pn`) —
-  that's also the address the bridge sends replies to. The bridge logs both
-  as `{ pn, lid }` once you send yourself a WhatsApp message after pairing
-  (see below); copy the `pn` value in and restart.
-- `projects` — list of `{name, path}` pairs Claude Code is allowed to run
-  against (SPEC.md §3, §4.4). Add every project you want reachable.
-- `project_root` — optional. Every immediate, non-hidden folder under here
-  becomes an available project automatically — no registration needed, just
-  `/project <name>` — and it's also the only place `/create <name>` is
-  allowed to make new project folders (SPEC.md §7.2). Leave unset to only
-  use the static `projects` list above and disable `/create`.
-- `project_containers` — optional. Folders under `project_root`, as relative
-  paths (e.g. `c`, `c/car`), that hold projects instead of being one. Each
-  is scanned one level deep, and its projects are named by relative path
-  (`c/whey`, `c/car/maintenance`). A missing container is skipped with a
-  warning in the log. Restart the orchestrator after changing this list
-  (SPEC.md §7.2).
-- `remote_control` — optional. `permission_mode` (default
-  `bypassPermissions`, so the session never asks for approval, whichever
-  device drives it) and `chrome` (default `false`: no Claude in Chrome, so
-  browser work uses Playwright MCP) for each project's shared live session
-  (SPEC.md §7.7).
-- `tts.voices` — maps a detected reply language to a Piper voice id
-  (defaults: `en_US-ljspeech-high`, `es_AR-daniela-high`). Only used once you
-  send `/voice on` (SPEC.md §7.4); any other detected language falls back to
-  `en`.
-- No config needed for Claude Code sending files back — see "Using it"
-  below and SPEC.md §7.5.
-
-## Pair with WhatsApp
-
-Run the bridge once interactively to scan the QR code:
+Edit `~/.config/claude-orchestrator/config.yaml`, then restart both services:
 
 ```bash
-cd whatsapp-bridge
-npm run dev
+systemctl --user restart claude-orchestrator.service whatsapp-bridge.service
 ```
 
-Open WhatsApp on your phone → **Linked Devices** → **Link a device**, and
-scan the QR code printed in the terminal. Once connected, send yourself a
-message in your own "Message Yourself" chat and confirm the bridge logs
-`{ pn, lid }` — copy the `pn` value into `allowed_sender_jid` in the
-config, then stop this process (Ctrl-C).
+`deploy/config.example.yaml` explains every key. The main ones:
 
-Auth state persists under `bridge.auth_dir` (default
-`~/.local/share/whatsapp-bridge/auth`), so re-pairing isn't needed on
-restart.
-
-## Run as services
-
-Node installed via `nvm` (as opposed to a system package) doesn't live at
-`/usr/bin/node`, and `systemctl --user` units don't source your shell's
-`nvm.sh`/`.bashrc` — so `ExecStart=` in `systemd/whatsapp-bridge.service`
-must be node's literal absolute path. Confirm it matches this machine
-(`command -v node`, or `nvm which default`) before enabling the service,
-and update the `ExecStart=` line if it doesn't.
-
-```bash
-mkdir -p ~/.config/systemd/user
-cp systemd/*.service ~/.config/systemd/user/
-systemctl --user daemon-reload
-systemctl --user enable --now whatsapp-bridge.service claude-orchestrator.service
-```
-
-These are `systemctl --user` units, so they start on login and stop on
-logout by design (SPEC.md §9/§10) — do **not** run
-`loginctl enable-linger`, since the intent is to tie service lifetime to an
-active login session.
-
-### Reloading after changes
-
-Neither service picks up code or config edits on its own — restart both
-after pulling new code, editing `config.yaml`, or rebuilding the bridge
-(`npm run build`):
-
-```bash
-systemctl --user restart whatsapp-bridge.service claude-orchestrator.service
-```
-
-If you only changed the unit files themselves (not their `ExecStart`
-targets), run `systemctl --user daemon-reload` first.
-
-If the bridge can't reconnect to WhatsApp after 10 attempts (~25 minutes of
-exponential backoff, capped at 5 minutes per attempt — SPEC.md §4.1), it
-exits cleanly and stays stopped rather than continuing to retry:
-
-```bash
-systemctl --user status whatsapp-bridge.service   # inactive (dead)
-systemctl --user start whatsapp-bridge.service    # once the issue clears
-```
+- `project_root`: every non-hidden folder directly under it is a project.
+  `/create` makes new project folders here. Leave it unset to use only
+  `projects` and turn off `/create`.
+- `project_containers`: folders under `project_root` (e.g. `c`, `c/car`)
+  that hold projects instead of being one. Their projects are named by
+  relative path (`c/whey`, `c/car/maintenance`).
+- `projects`: extra projects as `{name, path}` pairs, anywhere on disk.
+- `remote_control.permission_mode`: how the sessions ask for permission.
+  `bypassPermissions` never asks and cannot run as root; `auto` asks only
+  about actions its safety check flags.
+- `remote_control.chrome`: Claude in Chrome for the sessions (default
+  `false`: browser work uses the Playwright MCP plugin).
+- `whisper`: speech-to-text model and device (`large-v3` on `cuda` with a
+  GPU, `medium` on `cpu` without).
+- `tts.voices`: Piper voice per reply language for `/voice on`. Other
+  languages use `en`.
+- `whatsapp.allowed_sender_jid`: your number, written by pairing. Use the
+  phone-number form (`...@s.whatsapp.net`).
 
 Logs:
 
 ```bash
-journalctl --user -u whatsapp-bridge.service -f
 journalctl --user -u claude-orchestrator.service -f
-tail -f ~/.local/share/claude-orchestrator/logs/orchestrator.log
+journalctl --user -u whatsapp-bridge.service -f
 ```
+
+The orchestrator also writes `~/.local/share/claude-orchestrator/logs/orchestrator.log`.
+
+If the orchestrator exits with code 78 (missing `claude`, `tmux` or `ffmpeg`,
+`bypassPermissions` as root, or a second orchestrator on the same socket),
+systemd does not restart it. Fix the cause in the log, then restart it.
+
+After 10 failed reconnects to WhatsApp the bridge stops. Start it again with
+`systemctl --user start whatsapp-bridge.service` once the network is back.
+
+To pair again (for example after WhatsApp logged the device out): stop the
+bridge, delete `~/.local/share/whatsapp-bridge/auth`, run
+`node dist/index.js --pair` in `bridge/` with the Node binary from the
+`ExecStart=` line of `whatsapp-bridge.service`, then start the bridge.
 
 ## Using it
 
-In your "Message Yourself" WhatsApp chat:
+Write in your "Message Yourself" chat.
 
-- While **enabled** (the default), any text, voice note, or file attachment
-  goes to Claude Code running against the active project.
-- Since this is your everyday personal number, that same chat is also
-  where you'd jot personal notes — `/disable` stops anything from reaching
-  Claude Code until you `/enable` again, so you can use the chat for both
-  without a stray note accidentally becoming a command (SPEC.md §7.1).
-  Disabled messages are simply left alone; your own WhatsApp history is
-  the backup, nothing is copied elsewhere.
+- Text, voice notes and files go to the active project's session. A voice
+  note is transcribed first, and you get the transcript back ("🎙️ Heard: …"). A file
+  is saved into `<project>/whatsapp-inbox/` and Claude Code is told where.
 - **One session, three devices.** Each project has one live Claude Code
-  session, shared by WhatsApp, the Claude app (Code tab, through Remote
-  Control) and your computer (`tmux attach -t rc-<name>`). Whatever you send
-  from one is part of the same conversation on the others. Only answers to
-  messages you sent from WhatsApp come back to WhatsApp (SPEC.md §4.4, §7.7).
-- `/project <name-or-number>` — switch active project, by name or by its
-  number from `/projects`. Any project folder under `project_root` or one of
-  its containers works immediately, with no separate registration step.
-  `/project <container>` lists that container's projects (SPEC.md §7.2).
-  It also starts the project's live session, and replies "📱 rc-c-whey is
-  live in the Claude app" with its claude.ai link, plus the
-  `tmux attach -t rc-c-whey` command that opens the same session in a
-  terminal on your computer. To leave it, close the terminal window or tab:
-  the session keeps running. `/exit` ends the session. A second message previews
-  Claude's last answer in that project (200 characters). The session runs
-  through your login shell, so it gets the same environment and settings as
-  `claude` in a terminal, and resumes its last conversation when it starts
-  again. Claude in Chrome is off, so browser work goes through the
-  Playwright MCP plugin.
-- `/projects` — list every available project (config.yaml plus every
-  `project_root` project folder), numbered. Each container is an unnumbered
-  `📁` header with its projects indented under it. Shows just the name for anything under
-  `project_root` — a `config.yaml` project whose path falls outside it still
-  shows its full path.
-- `/create <name>` or `/create <container>/<name>` — create a new project
-  folder under `project_root` or inside one of its containers and switch to
-  it (only if `project_root` is configured; the folder name allows letters,
-  numbers, `-` and `_` — SPEC.md §7.2). Like `/project`, it starts the new
-  project's live session.
-- `/close [name-or-number]` — stop a project's live session (the active
-  project's when no argument is given). Sessions keep running when you
-  switch to another project, survive orchestrator restarts, and end on
-  reboot or logout; the next `/project` or WhatsApp message starts one
-  again (SPEC.md §7.7).
-- `/last` — Claude's full last answer in the active project, whichever
-  device the question came from.
-- `/stop` — drop your queued messages and interrupt the running turn (like
-  Esc at the keyboard). A message sent while the session is busy waits in a
-  queue and goes in once it's free ("⏳ Busy, queued").
-- `/reconnect [name-or-number]` — connect a session to the Claude app again,
-  e.g. after you archived it there. Archiving only disconnects the app; the
-  session keeps working for WhatsApp and the computer.
-- `/enable` / `/disable` — allow/stop messages from reaching Claude Code.
-- `/status` — enabled/disabled state, voice replies, active project
-  (busy/idle/queued), its session ID, the `tmux attach` command to open it on
-  the computer, and every Remote Control session: 🟢 connected, 🟡 not
-  connected (with the `/reconnect` to send), 🔴 exited, ⚪ started outside
-  WhatsApp.
-- `/c <text>` — type `<text>` into the session as is, e.g. `/c /usage`,
-  `/c /grill-me an idea` or `/c /clear` — use this to reach Claude Code's own
-  commands/skills, which would otherwise be swallowed as an unrecognized
-  command above. Built-in commands like `/usage` reply with what they show on
-  screen; `/c /clear` starts a fresh conversation and replies "🧹 Session
-  cleared". While disabled, `/c` (and any other unrecognized `/command`)
-  replies "Claude Code is disabled" instead of running — a leading `/` is
-  never a personal note, so unlike plain text it's never silently ignored
-  (SPEC.md §7.1/§7.3).
-- `/voice on` / `/voice off` — also send each reply as a WhatsApp voice note,
-  in addition to the text reply (off by default). The voice note speaks a
-  short (~100 word) spoken-style summary of the answer rather than reading
-  the full text reply aloud; the text reply always carries the complete
-  answer regardless. The voice note's language (English/Spanish, per
-  `tts.voices` above) is detected from the reply text each time, not fixed
-  to one language or based on how you asked (SPEC.md §7.4).
-- `/help` — show the command list.
-- Claude Code can also send **you** a file (e.g. a generated PDF report):
-  it just needs to save it into `<project>/whatsapp-outbox/` — it's told
-  about this convention when its session starts, so you can simply
-  ask it to "send me the report" and it'll know where to put it. Anything
-  placed there is delivered right after the reply to a WhatsApp message, then archived into
-  `whatsapp-outbox/sent/` so it's never resent. Files over 64MB get a clear
-  error instead of being sent. The first time it's used, `whatsapp-outbox/`
-  gets its own `.gitignore` containing `*`, so it stays out of git
-  (SPEC.md §7.5).
-- WhatsApp's own **reply** (quote) feature works too: replying to an earlier
-  message — text, an attachment, or a voice note, in either direction — adds
-  that quoted content as context ahead of your new message, e.g. replying
-  "make this black and white" to a photo re-downloads that photo into
-  `whatsapp-inbox/` and tells Claude Code about it, and replying to text
-  quotes it verbatim. Files saved into `whatsapp-inbox/`/`whatsapp-outbox/sent/`
-  get a short content-hash suffix (e.g. `report_a3f9c2d1.pdf`) so two
-  different files with the same name never collide (SPEC.md §5.9/§7.6).
+  session in tmux (`rc-<project>`). WhatsApp, the Claude app (Code tab) and
+  `tmux attach -t rc-<project>` on your computer all drive it. Only answers to
+  messages sent from WhatsApp come back to WhatsApp. Sessions survive
+  orchestrator restarts and resume their last conversation when started
+  again.
+- A message sent while the session is busy is queued ("⏳ Busy, queued").
+- Replying to an earlier message (WhatsApp's quote feature) adds the quoted
+  text, file or voice note as context.
+- To send you a file, Claude Code saves it into `<project>/whatsapp-outbox/`.
+  It knows this convention, so you can ask "send me the report". Files are
+  sent after the reply and then moved to `whatsapp-outbox/sent/`. Files over
+  64 MB are refused with an error.
 
-## Repository layout
+Commands:
 
-```
-SPEC.md                    full technical specification
-src/claude_orchestrator/   Python orchestrator (dispatcher, shared live sessions, hook relay, transcription, TTS, outgoing files, formatting, enable/disable state)
-whatsapp-bridge/           Node.js/TypeScript Baileys <-> Redis bridge
-config/config.example.yaml config template (copy to ~/.config/claude-orchestrator/config.yaml)
-systemd/                   systemd --user unit files
+- `/projects`: list every project, numbered, grouped by container.
+- `/project <name-or-number>`: switch to a project and start its session.
+  The reply has the Claude app link, the `tmux attach` command and a preview
+  of the last answer. `/project <container>` lists that container's projects.
+- `/create <name>` or `/create <container>/<name>`: create a project folder
+  under `project_root` and switch to it. Names allow letters, numbers, `-`
+  and `_`.
+- `/close [name-or-number]`: stop a project's session (default: the active
+  one).
+- `/last`: Claude's full last answer in the active project, from any device.
+- `/stop`: drop queued messages and interrupt the running turn.
+- `/status`: enabled or disabled, voice replies, the active project and every
+  Remote Control session (🟢 connected, 🟡 not connected, 🔴 exited, ⚪ started
+  outside WhatsApp).
+- `/reconnect [name-or-number]`: connect a session to the Claude app again,
+  for example after you archived it there.
+- `/enable` and `/disable`: let messages reach Claude Code, or keep them away.
+  While disabled, the chat is for personal notes: text, voice notes and files
+  are left alone, and any `/` command other than the ones above replies that
+  Claude Code is disabled.
+- `/voice on` and `/voice off`: also send each answer as a voice note (off by
+  default). The voice note speaks a short summary; the text reply has the
+  full answer. Its language (English or Spanish) is detected from the reply.
+- `/c <text>`: type `<text>` into the session as is, to reach Claude Code's
+  own commands and skills, e.g. `/c /usage` or `/c /clear` (starts a fresh
+  conversation).
+- `/help`: show the command list.
+
+## Uninstall
+
+```bash
+./install.sh --uninstall   # remove the services, keep config and data
+./install.sh --purge       # also delete config, WhatsApp pairing and state
 ```
 
-## Changelog
+Linger stays on. Turn it off with `loginctl disable-linger $USER` if no other
+service needs it.
 
-Newest first. Details for each change are in SPEC.md and the git history.
+## Development
 
-### 2026-10-23
+```
+orchestrator/            Python orchestrator (src/claude_orchestrator, tests)
+bridge/                  Node/TypeScript WhatsApp bridge (src, test)
+install.sh               installer
+deploy/install/          installer functions
+deploy/systemd/          unit templates
+deploy/config.example.yaml
+deploy/tests/            installer tests and container tests
+docs/architecture.md     components, socket protocol, config, data, services
+```
 
-- WhatsApp, the Claude app and the computer share one live session per
-  project: WhatsApp messages are typed into the project's
-  `claude --remote-control` session in tmux, and answers come back through
-  Claude Code hooks. Only answers to WhatsApp messages are sent to WhatsApp.
-- Messages sent while the session is busy are queued; `/stop` drops the
-  queue and interrupts the running turn.
-- New `/last` and `/reconnect` commands. `/project` previews the last answer.
-- `/new` is gone: `/c /clear` starts a fresh conversation. `/c /usage` and
-  other built-in commands reply with what they show on screen.
-- `/status` shows the `tmux attach` command and every Remote Control session
-  with its state, including sessions started outside WhatsApp.
-- Replies use bullets; `/help` is grouped into sections.
-- `remote_control.spawn` is gone; new `redis.hooks_channel` (default
-  `claude:hooks`).
+Tests:
 
-### 2026-10-22
+```bash
+cd orchestrator && uv run pytest -q                       # without a GPU
+cd orchestrator && uv run --extra cuda pytest -q          # with the cuda extra
+uv run --project orchestrator pytest deploy/tests -q      # installer, from the repo root
+cd bridge && npm test && npm run build                    # bridge
+deploy/tests/containers.sh                                # Ubuntu, Fedora, Arch and Node 20 containers; needs Docker
+```
 
-- `/project` and `/create` start a Claude Code Remote Control server for the
-  project in a detached tmux session (`rc-<name>`), so the project opens in
-  the Code tab of the Claude mobile app. The server runs through your login
-  shell, in `bypassPermissions` mode, with Claude in Chrome off. Servers
-  survive orchestrator restarts.
-- New `/close [name-or-number]` command stops a project's server.
-- `/status` lists the running servers.
-- New `remote_control` config block: `permission_mode`, `spawn`, `chrome`.
-- `tmux` is a prerequisite.
-- Nested project containers: `project_containers` lists folders under
-  `project_root` that hold projects (`c/whey`, `c/car/maintenance`).
-  `/projects` groups projects under their container, and `/create` accepts
-  `<container>/<name>`.
-
-### 2026-08-18
-
-- Voice replies speak a short spoken summary of the answer instead of the
-  full text.
-- GPU transcription uses the pip-installed CUDA libraries (`LD_LIBRARY_PATH`
-  in the systemd unit).
-
-### 2026-08-06
-
-- Each project's Claude Code session ID persists across restarts.
-- `/new` creates the replacement session right away.
-
-### 2026-08-03
-
-- The active project persists across restarts.
-- `claude_code.binary` must be an absolute path.
-- Restart and reload instructions for the services.
-
-### 2026-07-28
-
-- `/projects` shows just the name for projects under `project_root`.
-- The bridge reconnects with exponential backoff and fetches the current
-  WhatsApp protocol version at startup.
-- Baileys upgraded to `^7.0.0-rc14`.
-
-### 2026-07-27
-
-- `/create` makes a new project folder and switches to it.
-- `/c <text>` sends text to Claude Code verbatim.
-- Voice replies (`/voice on`), outgoing files (`whatsapp-outbox/`) and
-  reply/quote context.
-- Every folder under `project_root` is a project, discovered live.
-
-### 2026-07-26
-
-- First version: WhatsApp self-chat messages (text, voice notes, files) go to
-  Claude Code, and replies come back to WhatsApp.
+After changing code, run `./install.sh` again or restart both services.

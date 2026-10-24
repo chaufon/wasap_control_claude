@@ -1,4 +1,4 @@
-"""Config loading for the claude-orchestrator (SPEC.md §8)."""
+"""Config loading for the claude-orchestrator."""
 
 from __future__ import annotations
 
@@ -51,8 +51,7 @@ REMOTE_CONTROL_PERMISSION_MODES = (
 
 @dataclass(frozen=True)
 class RemoteControlConfig:
-    """Flags for each project's live `claude --remote-control` session
-    (SPEC.md §7.7)."""
+    """Flags for each project's live `claude --remote-control` session."""
 
     permission_mode: str = "bypassPermissions"
     # Claude in Chrome for the session. Off: browser work goes through
@@ -82,7 +81,7 @@ class ProgressUpdatesConfig:
 
 @dataclass(frozen=True)
 class TTSConfig:
-    # Maps a langdetect language code to a Piper voice id (SPEC.md §7.4).
+    # Maps a langdetect language code to a Piper voice id.
     # Any detected language without an entry here falls back to "en".
     voices: dict[str, str] = field(
         default_factory=lambda: {"en": "en_US-ljspeech-high", "es": "es_AR-daniela-high"}
@@ -102,7 +101,7 @@ class TTSConfig:
 @dataclass(frozen=True)
 class BridgeConfig:
     """Only the one field the orchestrator itself needs from the `bridge:`
-    section — the rest of that section is Node-bridge-only (SPEC.md §8)."""
+    section — the rest of that section is Node-bridge-only."""
 
     outgoing_staging_dir: Path = Path("/tmp/whatsapp-bridge/outgoing")
 
@@ -118,11 +117,11 @@ class Config:
     transport: TransportConfig = field(default_factory=TransportConfig)
     progress_updates: ProgressUpdatesConfig = field(default_factory=ProgressUpdatesConfig)
     bridge: BridgeConfig = field(default_factory=BridgeConfig)
-    # Parent directory /create is allowed to make new project folders under
-    # (SPEC.md §7.2). None means /create is not configured/available.
+    # Parent directory /create is allowed to make new project folders under.
+    # None means /create is not configured/available.
     project_root: Path | None = None
     # Folders under project_root, as relative paths, that hold projects
-    # instead of being one (SPEC.md §7.2). Each is scanned one level deep.
+    # instead of being one. Each is scanned one level deep.
     project_containers: tuple[str, ...] = ()
 
     @property

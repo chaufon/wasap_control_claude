@@ -1,4 +1,4 @@
-"""Messages carried in the socket bus frames (socket_bus.py, SPEC.md §6)."""
+"""Messages carried in the socket bus frames (socket_bus.py)."""
 
 from __future__ import annotations
 
@@ -17,7 +17,7 @@ class IncomingMessage:
     text: str | None = None
     media_path: str | None = None
     media_mime_type: str | None = None
-    # WhatsApp's reply/quote feature (SPEC.md §5.9/§7.6) — populated
+    # WhatsApp's reply/quote feature — populated
     # regardless of this message's own `type`, since you can reply to an
     # earlier message with text, voice, or an attachment interchangeably.
     # quoted_text is set verbatim when the quoted message was itself text;
@@ -50,7 +50,7 @@ class IncomingMessage:
 
 @dataclass(frozen=True)
 class OutgoingMessage:
-    # Exactly one of text/media_path is set per message (SPEC.md §7.4/§7.5):
+    # Exactly one of text/media_path is set per message:
     # a voice-note or file reply is its own separate message, not tacked
     # onto the text reply already sent for the same result. `caption` is
     # only meaningful alongside media_path (a document's on-screen caption,
@@ -63,8 +63,7 @@ class OutgoingMessage:
     caption: str | None = None
     # Whether the bridge should delete media_path after sending it: True for
     # synthesized TTS temp files, False for whatsapp-outbox/ files, which the
-    # orchestrator has already relocated to their permanent sent/ home
-    # (SPEC.md §7.5).
+    # orchestrator has already relocated to their permanent sent/ home.
     delete_after_send: bool = True
 
     def to_dict(self) -> dict[str, Any]:

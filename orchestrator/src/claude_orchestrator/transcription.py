@@ -1,4 +1,4 @@
-"""Local voice-note transcription via faster-whisper (SPEC.md §4.3, §5.2).
+"""Local voice-note transcription via faster-whisper.
 
 Uses the configured model and device (default `medium` on CPU). When the
 model fails to load (e.g. a GPU driver issue), the configured fallback model

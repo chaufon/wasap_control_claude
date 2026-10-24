@@ -1,5 +1,5 @@
 """Outgoing files from Claude Code via a project-local whatsapp-outbox/
-convention (SPEC.md §7.5) — the reverse of whatsapp-inbox/ for incoming
+convention — the reverse of whatsapp-inbox/ for incoming
 attachments (dispatcher.py's _stage_attachment). Claude Code itself decides
 what to send by placing files there; nothing else it creates in the project
 is ever touched.

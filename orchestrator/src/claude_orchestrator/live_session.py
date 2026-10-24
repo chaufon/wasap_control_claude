@@ -1,7 +1,7 @@
 """Shared Claude Code sessions: one interactive `claude --remote-control`
 per project, each in its own detached tmux session. The Claude app (Remote
 Control), the computer (`tmux attach`) and WhatsApp all drive that one live
-process, so they share one conversation (SPEC.md §7.7)."""
+process, so they share one conversation."""
 
 from __future__ import annotations
 

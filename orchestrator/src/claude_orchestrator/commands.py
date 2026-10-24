@@ -1,4 +1,4 @@
-"""Chat command parsing (SPEC.md §7)."""
+"""Chat command parsing and the /help text."""
 
 from __future__ import annotations
 

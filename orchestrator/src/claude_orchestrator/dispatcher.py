@@ -1,6 +1,5 @@
 """Core message dispatcher: project state, command handling, attachment
-staging, and WhatsApp turns in each project's shared live session (SPEC.md
-§5, §7)."""
+staging, and WhatsApp turns in each project's shared live session."""
 
 from __future__ import annotations
 
@@ -31,7 +30,7 @@ from .voice_summary import split_reply
 
 logger = logging.getLogger(__name__)
 
-# One folder name — no slashes/dots/".." (SPEC.md §7.2 Q4). /create checks
+# One folder name — no slashes/dots/"..". /create checks
 # each new folder name against this, and its parent against the known
 # containers, which makes an entire class of path-traversal bugs
 # structurally impossible rather than relying on careful normalization.
@@ -39,7 +38,7 @@ _VALID_PROJECT_NAME_RE = re.compile(r"^[A-Za-z0-9_-]{1,100}$")
 
 # Anything starting with "/" is unambiguously an attempted command, never a
 # personal note, so it gets an explicit notice while disabled — unlike plain
-# text/voice/attachments, which stay silent (SPEC.md §7.1/§7.3).
+# text/voice/attachments, which stay silent.
 _DISABLED_NOTICE = "🔴 Claude Code is disabled. Send /enable first."
 
 # Reply to anything that needs an active project while none is selected.
@@ -69,8 +68,8 @@ TurnOutcome = Literal["answer", "stopped", "exited", "timeout", "unconfirmed"]
 def _stage_into_inbox(source: Path, project_path: Path, timestamp: str) -> Path:
     """Move `source` into <project_path>/whatsapp-inbox/, content-hash-suffixed
     so a same-named file staged at a different time never silently overwrites
-    an earlier one (SPEC.md §5.9's outbox naming applies the same idea).
-    Shared by a message's own attachment and any quoted attachment (§5.9)."""
+    an earlier one (outbox.py names sent files the same way).
+    Shared by a message's own attachment and any quoted attachment."""
     inbox = project_path / "whatsapp-inbox"
     inbox.mkdir(exist_ok=True)
     dest = inbox / f"{timestamp}-{source.stem}_{content_hash8(source)}{source.suffix}"
@@ -89,8 +88,7 @@ def _attach_command(session: str) -> str:
 
 def _describe_launch(result: LaunchResult) -> str:
     """The WhatsApp lines for a live-session launch: where the session is
-    in the Claude app, and how to open and leave it on the computer
-    (SPEC.md §7.7)."""
+    in the Claude app, and how to open and leave it on the computer."""
     computer = (
         f"🖥️ On the computer: {_attach_command(result.session)}\n"
         "🚪 To leave, close the terminal window or tab; /exit ends the session"
@@ -141,7 +139,7 @@ class ProjectState:
 
 class ProgressBatcher:
     """Buffers tool-call names and flushes a summary at a fixed interval
-    while a task is running (SPEC.md §5.4)."""
+    while a task is running."""
 
     def __init__(
         self, interval_seconds: int, send: Callable[[str], Awaitable[None]]
@@ -215,7 +213,7 @@ class Dispatcher:
 
     def _adopt_project(self, name: str, path: Path) -> None:
         """Register a project_root-discovered folder the first time it's
-        switched to this run (SPEC.md §7.2) — a no-op for names already
+        switched to this run — a no-op for names already
         known, whether static or previously adopted."""
         if name not in self._projects:
             self._projects[name] = ProjectState(config=ProjectConfig(name=name, path=path))
@@ -259,7 +257,7 @@ class Dispatcher:
 
     def _scan(self) -> ProjectScan:
         """Live view of project_root's non-hidden subfolders and those of
-        its project_containers (SPEC.md §7.2) — every one of them is
+        its project_containers — every one of them is
         automatically an available project, no registration step required.
         Re-scanned on every call rather than cached, so a folder created
         outside the bot (or by /create) shows up immediately without an
@@ -291,7 +289,7 @@ class Dispatcher:
 
     def _format_project_line(self, name: str, path: Path) -> str:
         """Just the name for anything under project_root — the path is
-        redundant once every project shares that root (SPEC.md §7.2). A
+        redundant once every project shares that root. A
         static config.yaml entry pointing outside project_root still shows
         its path, since there's no shared root to omit it against."""
         root = self._config.project_root
@@ -302,11 +300,11 @@ class Dispatcher:
     def _resolve_project_name(self, arg: str) -> str | None:
         """Resolve /project's argument — a name or a 1-based /projects list
         number — to a known project name, lazily adopting a project_root
-        folder that hasn't been switched to yet this run (SPEC.md §7.2).
+        folder that hasn't been switched to yet this run.
         Once adopted it behaves exactly like any statically-configured
         project for the rest of this process's lifetime; nothing is
         persisted to disk, so an untouched folder is simply found again
-        live next time (SPEC.md §7.2)."""
+        live next time."""
         all_projects = self._all_known_projects()
         if arg.isdigit():
             names = list(all_projects)
@@ -388,7 +386,7 @@ class Dispatcher:
 
     async def _handle(self, message: IncomingMessage) -> None:
         # Defense-in-depth: the bridge already scopes to the self-chat and
-        # applies its own allow-list check (SPEC.md §4.1, §9).
+        # applies its own allow-list check.
         if message.sender_jid != self._config.whatsapp.allowed_sender_jid:
             logger.warning("ignoring message from non-allowed sender %s", message.sender_jid)
             return
@@ -402,7 +400,7 @@ class Dispatcher:
                 await self._handle_command(command, message)
                 return
             if not self._state.claude_enabled:
-                return  # personal note/backup content: leave it alone (SPEC.md §7.1)
+                return  # personal note/backup content: leave it alone
             if self._active_project is None:
                 await self._reply(NO_PROJECT_REPLY, message)
                 return
@@ -512,7 +510,7 @@ class Dispatcher:
             # Escape hatch for Claude Code's own slash commands/skills (e.g. "/c
             # /usage"), which would otherwise be swallowed by the command table
             # above. Content bound for Claude, so it honors the toggle like any
-            # other prompt — unlike the meta-commands above (SPEC.md §7.3).
+            # other prompt — unlike the meta-commands above.
             if not self._state.claude_enabled:
                 await self._reply(_DISABLED_NOTICE, message)
                 return
@@ -612,8 +610,8 @@ class Dispatcher:
 
     async def _launch(self, name: str) -> str:
         """Start the project's live session, unless it is already up,
-        resuming its shared session, and describe the outcome in one line
-        (SPEC.md §7.7). A project switch stands whatever the outcome."""
+        resuming its shared session, and describe the outcome in one line.
+        A project switch stands whatever the outcome."""
         result = await self._live.launch(
             name, self._projects[name].config.path, self._state.shared_sessions.get(name)
         )
@@ -744,7 +742,7 @@ class Dispatcher:
         return "\n".join(lines)
 
     async def _remote_control_lines(self) -> list[str]:
-        """One "◦" line per live session (SPEC.md §7.7): 🟢 connected to the
+        """One "◦" line per live session: 🟢 connected to the
         app, 🟡 running but not connected, 🔴 exited (reported once, then
         removed), ⚪ started outside WhatsApp."""
         sessions = await self._live.sessions()
@@ -779,7 +777,7 @@ class Dispatcher:
 
     async def _handle_prompt(self, prompt: str, message: IncomingMessage) -> None:
         """Queue a WhatsApp prompt for the active project's live session,
-        starting the session first when it is not running (SPEC.md §7.7)."""
+        starting the session first when it is not running."""
         name = self._active_project
         if name is None:
             await self._reply(NO_PROJECT_REPLY, message)
@@ -970,7 +968,7 @@ class Dispatcher:
             audio_path = await self._synthesizer.synthesize_async(text)
         except Exception:
             logger.exception("voice synthesis failed for message %s", message.message_id)
-            return  # text reply already sent; voice is a best-effort extra (SPEC.md §7.4)
+            return  # text reply already sent; voice is a best-effort extra
         await self._bus.publish_outgoing(
             OutgoingMessage(
                 in_reply_to=message.message_id,
@@ -1015,8 +1013,8 @@ class Dispatcher:
         return f"{caption}attached file: {relative}"
 
     async def _build_reply_context(self, message: IncomingMessage) -> str:
-        """Prefix for messages that quote/reply to an earlier one (SPEC.md
-        §5.9/§7.6) — applies regardless of this message's own type, since a
+        """Prefix for messages that quote/reply to an earlier one —
+        applies regardless of this message's own type, since a
         reply can itself be text, voice, or an attachment."""
         if message.quoted_media_path and self._active_project is not None:
             try:

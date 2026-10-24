@@ -10,7 +10,7 @@ export interface IncomingEvent {
   text: string | null;
   media_path: string | null;
   media_mime_type: string | null;
-  // WhatsApp's reply/quote feature (SPEC.md §5.9/§7.6) — set regardless of
+  // WhatsApp's reply/quote feature — set regardless of
   // this message's own `type`. quoted_text is set verbatim for a quoted text
   // message; quoted_media_path/mime_type are set when a quoted
   // attachment/voice note was successfully re-downloaded;
@@ -23,7 +23,7 @@ export interface IncomingEvent {
 }
 
 export interface OutgoingEvent {
-  // Exactly one of text/media_path is set per event (SPEC.md §7.4/§7.5).
+  // Exactly one of text/media_path is set per event.
   text: string | null;
   in_reply_to: string | null;
   media_path: string | null;

@@ -1,5 +1,4 @@
-"""Best-effort Markdown -> WhatsApp formatting, and long-message splitting
-(SPEC.md §5.6).
+"""Best-effort Markdown -> WhatsApp formatting, and long-message splitting.
 
 WhatsApp only understands: *bold*, _italic_, ~strikethrough~, and
 ```monospace``` blocks. Everything else (headers, tables, links) is
@@ -129,7 +128,7 @@ _CODE_BLOCK_PLACEHOLDER = " (code block omitted) "
 
 
 def strip_for_speech(text: str) -> str:
-    """Reduce Markdown to plain prose for TTS (SPEC.md §7.4) — the text
+    """Reduce Markdown to plain prose for TTS — the text
     channel keeps full Markdown via format_response above; this is only for
     what gets spoken. Code isn't meaningful read aloud, so fenced/inline
     code is dropped rather than transliterated."""
