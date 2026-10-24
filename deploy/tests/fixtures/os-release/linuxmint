@@ -1,0 +1,4 @@
+NAME="Linux Mint"
+VERSION_ID="22"
+ID=linuxmint
+ID_LIKE="ubuntu debian"
