@@ -36,12 +36,12 @@ _sha256_of() {
 install_private_node() {
     local dest="$1" aside os ext arch sums tmp name expected actual parent
 
+    # tar.gz needs only gzip; tar.xz would need xz, which minimal images lack.
+    ext=tar.gz
     if [ "$(uname -s)" = "Darwin" ]; then
         os=darwin
-        ext=tar.gz
     else
         os=linux
-        ext=tar.xz
     fi
     arch=$(node_arch)
     parent=$(dirname "$dest")

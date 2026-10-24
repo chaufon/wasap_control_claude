@@ -215,10 +215,8 @@ def make_node_dist(tmp_path, checksum=None):
     import tarfile
 
     arch = run("node_arch").stdout.strip()
-    if os.uname().sysname == "Darwin":
-        name, mode = f"node-v24.1.0-darwin-{arch}.tar.gz", "w:gz"
-    else:
-        name, mode = f"node-v24.1.0-linux-{arch}.tar.xz", "w:xz"
+    os_name = "darwin" if os.uname().sysname == "Darwin" else "linux"
+    name, mode = f"node-v24.1.0-{os_name}-{arch}.tar.gz", "w:gz"
     dist = tmp_path / "dist"
     dist.mkdir()
     payload = tmp_path / "payload" / "node-v24.1.0" / "bin"
@@ -230,7 +228,8 @@ def make_node_dist(tmp_path, checksum=None):
         tar.add(tmp_path / "payload" / "node-v24.1.0", arcname="node-v24.1.0")
     digest = checksum or hashlib.sha256(tarball.read_bytes()).hexdigest()
     (dist / "SHASUMS256.txt").write_text(
-        f"{'0' * 64}  node-v24.1.0-other.tar.xz\n{digest}  {name}\n"
+        f"{'0' * 64}  node-v24.1.0-other.tar.gz\n{digest}  {name}\n"
+        f"{'1' * 64}  {name[:-3]}.xz\n"
     )
     return dist
 
