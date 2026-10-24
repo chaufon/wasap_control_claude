@@ -1,93 +1,86 @@
 # Copy this file to ~/.config/claude-orchestrator/config.yaml (or set
 # CLAUDE_ORCHESTRATOR_CONFIG to point elsewhere) and fill in your own
-# values. Read by both the Python orchestrator and the Node bridge
-# (SPEC.md §8).
+# values. Read by both the Python orchestrator and the Node bridge.
+# install.sh writes this file for you.
 
 whatsapp:
-  # Your own phone-number-form WhatsApp JID, e.g. "51987654321@s.whatsapp.net"
-  # — the bridge logs it as the "pn" field of { pn, lid } the first time you
-  # send yourself a message after pairing. Use "pn" here, not "lid": it's
-  # also the address the bridge sends replies to. WhatsApp addresses
+  # Your own phone-number-form WhatsApp JID, e.g. "51987654321@s.whatsapp.net".
+  # `bridge --pair` prints it. Use the phone-number form, not the "lid" form:
+  # it is also the address the bridge sends replies to. WhatsApp addresses
   # self-chat messages under either identity depending on which client sent
-  # them (phone app -> lid, Desktop/Web -> pn); the bridge already accepts
-  # both automatically, so only "pn" needs to be configured here (SPEC.md §4.1).
+  # them (phone app -> lid, Desktop/Web -> pn); the bridge accepts both
+  # automatically, so only the phone-number form is configured here.
   allowed_sender_jid: "REPLACE_ME@s.whatsapp.net"
 
-projects:
-  - name: wasap-grill-me
-    path: /home/centos/PycharmProjects/wasap_grill_me
-  # - name: another-project
-  #   path: /home/centos/PycharmProjects/another-project
+# Static projects. Each entry needs a name and an existing directory:
+#   - name: my-project
+#     path: ~/projects/my-project
+projects: []
 
-# Optional. Every immediate, non-hidden folder under here is automatically
-# an available project (SPEC.md §7.2) — switch with /project <name-or-number>,
-# no registration needed, discovered live each time. Also the only tree
-# /create is allowed to make new folders in (folder names validated against
-# a safe charset, no slashes/".."). Leave unset to only use the static
-# `projects` list above and disable /create.
-project_root: /home/centos/PycharmProjects
+# Every immediate, non-hidden folder under here is automatically an available
+# project: switch with /project <name-or-number>, no registration needed,
+# discovered live each time. It is also the only tree /create may make new
+# folders in (folder names are validated against a safe charset, no
+# slashes or ".."). Leave unset to use only the `projects` list and disable
+# /create.
+project_root: ~/projects
 
-# Optional. Folders under project_root, as relative paths, that hold
-# projects instead of being one (SPEC.md §7.2). Each is scanned one level
-# deep; its projects are named by relative path (c/whey, c/car/maintenance)
-# and /create c/newapp works inside it. A nested container (c/car) is
-# only scanned when its parent (c) is listed too. Read at startup —
-# restart after changing it.
-# project_containers:
-#   - c
-#   - c/car
+# Folders under project_root, as relative paths, that hold projects instead
+# of being one. Each is scanned one level deep; its projects are named by
+# relative path (c/whey, c/car/maintenance) and /create c/newapp works inside
+# it. A nested container (c/car) is only scanned when its parent (c) is listed
+# too. Read at startup: restart after changing it.
+project_containers: []
 
 claude_code:
-  # Must be an absolute path: systemd --user units don't reliably inherit
-  # a PATH containing ~/.local/bin (it depends on when the user manager's
-  # environment gets updated relative to service start), so a bare "claude"
-  # can resolve at some boots and fail at others. `which claude` prints the
-  # current target.
-  binary: /home/centos/.local/bin/claude
+  # Path or command name of the Claude Code binary. install.sh writes the
+  # absolute path, because systemd user units do not reliably inherit a PATH
+  # containing ~/.local/bin.
+  binary: claude
   # Hard timeout per WhatsApp turn; after this the turn is interrupted and
-  # treated as a failure (SPEC.md §5.7).
+  # treated as a failure.
   task_timeout_seconds: 900
 
-# Each project's shared live session (claude --remote-control in tmux),
-# used by WhatsApp, the Claude app and the computer (SPEC.md §7.7). Uses
-# claude_code.binary above. Needs tmux.
+# Each project's shared live session (claude --remote-control in tmux), used
+# by WhatsApp, the Claude app and the computer. Uses claude_code.binary above.
+# Needs tmux.
 remote_control:
   # acceptEdits | auto | bypassPermissions | default | dontAsk | plan.
-  # bypassPermissions never asks. auto asks about actions its safety check
-  # flags. default asks for every edit.
+  # bypassPermissions never asks and is refused when running as root. auto
+  # asks about actions its safety check flags. default asks for every edit.
   permission_mode: bypassPermissions
   # Claude in Chrome for the session. false: browser work goes through the
   # Playwright MCP plugin, not your real, logged-in Chrome.
   chrome: false
 
+# Speech-to-text for voice notes. Models download automatically on first use.
+# install.sh writes large-v3 on cuda when an NVIDIA GPU is usable.
 whisper:
-  model: large-v3
-  device: cuda
+  model: medium
+  device: cpu
+  # Used when the primary model fails to load.
   fallback_device: cpu
   fallback_model: medium
 
-# Voice replies via /voice on (SPEC.md §7.4), off by default. Piper voice
-# models download automatically on first use (like whisper's above) into
-# tts.models_dir. langdetect picks which of these voices to use per reply,
-# based on the reply's own language — not the input message's language, and
-# not a static config default. Any detected language without an entry here
-# falls back to "en".
+# Voice replies via /voice on, off by default. Piper voice models download
+# automatically on first use into tts.models_dir. langdetect picks which of
+# these voices to use per reply, based on the reply's own language, not the
+# input message's language. Any detected language without an entry here falls
+# back to "en".
 tts:
   voices:
     en: en_US-ljspeech-high
     es: es_AR-daniela-high
   # CPU is intentional: Piper is fast enough without a GPU, and this avoids
-  # VRAM contention with whisper.device: cuda above on a single GPU.
+  # VRAM contention with whisper.device: cuda on a single GPU.
   device: cpu
   models_dir: "~/.local/share/claude-orchestrator/piper-voices"
 
-redis:
-  host: 127.0.0.1
-  port: 6379
-  incoming_channel: "whatsapp:incoming"
-  outgoing_channel: "whatsapp:outgoing"
-  # Hook events from the live sessions (SPEC.md §6.3).
-  hooks_channel: "claude:hooks"
+# The Unix socket the orchestrator listens on and the bridge connects to.
+transport:
+  # null: $XDG_RUNTIME_DIR/claude-orchestrator.sock, else
+  # ${TMPDIR:-/tmp}/claude-orchestrator-<uid>.sock.
+  socket_path: null
 
 progress_updates:
   interval_seconds: 10
@@ -97,5 +90,5 @@ bridge:
   auth_dir: "~/.local/share/whatsapp-bridge/auth"
   staging_dir: "/tmp/whatsapp-bridge/incoming"
   # Shared: the Python orchestrator writes synthesized voice-reply audio
-  # here; the Node bridge reads it, sends it, and deletes it (SPEC.md §7.4).
+  # here; the Node bridge reads it, sends it, and deletes it.
   outgoing_staging_dir: "/tmp/whatsapp-bridge/outgoing"
