@@ -1,9 +1,17 @@
+import io
 import json
+import socket
+import threading
 from pathlib import Path
+from typing import TYPE_CHECKING
 
-from claude_orchestrator.hook_relay import PENDING_MAX_AGE_SECONDS, build
+from claude_orchestrator.hook_relay import PENDING_MAX_AGE_SECONDS, build, main
 from claude_orchestrator.live_session import pending_path
 from claude_orchestrator.voice_summary import VOICE_SUMMARY_SYSTEM_PROMPT
+
+if TYPE_CHECKING:
+    from _pytest.capture import CaptureFixture
+    from _pytest.monkeypatch import MonkeyPatch
 
 PROMPT = {
     "hook_event_name": "UserPromptSubmit",
@@ -76,3 +84,62 @@ def test_other_events_keep_only_the_needed_fields(tmp_path: Path) -> None:
     stop = {"hook_event_name": "Stop", "prompt_id": "p1", "last_assistant_message": "done"}
     assert build(stop, "rc-app", tmp_path, now=100)[0]["last_assistant_message"] == "done"
     assert path.exists()
+
+
+def _serve_once(path: Path) -> tuple[threading.Thread, list[bytes]]:
+    """A fake orchestrator that accepts one connection and records what it reads."""
+    server = socket.socket(socket.AF_UNIX)
+    server.bind(str(path))
+    server.listen(1)
+    server.settimeout(5)
+    received: list[bytes] = []
+
+    def accept() -> None:
+        try:
+            conn, _ = server.accept()
+        except TimeoutError:
+            server.close()
+            return
+        with conn:
+            while chunk := conn.recv(65536):
+                received.append(chunk)
+        server.close()
+
+    thread = threading.Thread(target=accept)
+    thread.start()
+    return thread, received
+
+
+def test_main_writes_one_hook_frame_to_the_socket(tmp_path: Path, monkeypatch: "MonkeyPatch") -> None:
+    """The relay sends the event as a single `hook` frame line and disconnects."""
+    path = tmp_path / "bus.sock"
+    thread, received = _serve_once(path)
+    stop = {"hook_event_name": "Stop", "prompt_id": "p1", "last_assistant_message": "done"}
+    monkeypatch.setattr("sys.stdin", io.StringIO(json.dumps(stop)))
+
+    main(["--session", "rc-app", "--socket", str(path), "--live-dir", str(tmp_path)])
+    thread.join(timeout=5)
+
+    data = b"".join(received)
+    assert data.endswith(b"\n") and data.count(b"\n") == 1
+    assert json.loads(data) == {
+        "kind": "hook",
+        "data": {**stop, "live_session": "rc-app"},
+    }
+
+
+def test_main_exits_0_when_nobody_listens(
+    tmp_path: Path, monkeypatch: "MonkeyPatch", capsys: "CaptureFixture[str]"
+) -> None:
+    """A missing orchestrator is logged to stderr and never fails the session."""
+    monkeypatch.setattr("sys.stdin", io.StringIO(json.dumps({"hook_event_name": "Stop"})))
+    main(["--session", "rc-app", "--socket", str(tmp_path / "absent.sock"), "--live-dir", str(tmp_path)])
+    assert "claude-orchestrator hook relay" in capsys.readouterr().err
+
+
+def test_main_exits_0_on_bad_arguments(monkeypatch: "MonkeyPatch", capsys: "CaptureFixture[str]") -> None:
+    """Unusable arguments are logged to stderr; the hook still exits 0, since a
+    failing UserPromptSubmit hook would block the prompt."""
+    monkeypatch.setattr("sys.stdin", io.StringIO("{}"))
+    main(["--session", "rc-app", "--unknown", "x"])
+    assert "claude-orchestrator hook relay" in capsys.readouterr().err

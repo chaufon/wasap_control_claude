@@ -9,6 +9,8 @@ from pathlib import Path
 
 import yaml
 
+from .socket_bus import default_socket_path
+
 logger = logging.getLogger(__name__)
 
 DEFAULT_CONFIG_PATH = Path(
@@ -66,13 +68,10 @@ class WhisperConfig:
 
 
 @dataclass(frozen=True)
-class RedisConfig:
-    host: str = "127.0.0.1"
-    port: int = 6379
-    incoming_channel: str = "whatsapp:incoming"
-    outgoing_channel: str = "whatsapp:outgoing"
-    # Hook events from the live sessions (hook_relay.py).
-    hooks_channel: str = "claude:hooks"
+class TransportConfig:
+    """The Unix socket the orchestrator listens on (socket_bus.py)."""
+
+    socket_path: Path = field(default_factory=default_socket_path)
 
 
 @dataclass(frozen=True)
@@ -115,7 +114,7 @@ class Config:
     remote_control: RemoteControlConfig = field(default_factory=RemoteControlConfig)
     whisper: WhisperConfig = field(default_factory=WhisperConfig)
     tts: TTSConfig = field(default_factory=TTSConfig)
-    redis: RedisConfig = field(default_factory=RedisConfig)
+    transport: TransportConfig = field(default_factory=TransportConfig)
     progress_updates: ProgressUpdatesConfig = field(default_factory=ProgressUpdatesConfig)
     bridge: BridgeConfig = field(default_factory=BridgeConfig)
     # Parent directory /create is allowed to make new project folders under
@@ -167,7 +166,7 @@ def load_config(path: Path | None = None) -> Config:
     remote_control = _parse_remote_control(raw.get("remote_control") or {})
     whisper_raw = raw.get("whisper") or {}
     tts_raw = raw.get("tts") or {}
-    redis_raw = raw.get("redis") or {}
+    transport_raw = raw.get("transport") or {}
     progress_raw = raw.get("progress_updates") or {}
     bridge_raw = raw.get("bridge") or {}
     project_root_raw = raw.get("project_root")
@@ -200,10 +199,8 @@ def load_config(path: Path | None = None) -> Config:
                 )
             ).expanduser(),
         ),
-        redis=RedisConfig(
-            host=redis_raw.get("host", "127.0.0.1"),
-            port=int(redis_raw.get("port", 6379)),
-            hooks_channel=redis_raw.get("hooks_channel", "claude:hooks"),
+        transport=TransportConfig(
+            socket_path=Path(transport_raw.get("socket_path") or default_socket_path()).expanduser(),
         ),
         progress_updates=ProgressUpdatesConfig(
             interval_seconds=int(progress_raw.get("interval_seconds", 10)),

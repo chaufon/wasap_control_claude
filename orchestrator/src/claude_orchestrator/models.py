@@ -1,4 +1,4 @@
-"""Message models matching the Redis channel schemas (SPEC.md §6)."""
+"""Messages carried in the socket bus frames (socket_bus.py, SPEC.md §6)."""
 
 from __future__ import annotations
 

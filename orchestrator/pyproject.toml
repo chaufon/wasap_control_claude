@@ -4,7 +4,6 @@ version = "0.1.0"
 description = "Claude Code remote control via WhatsApp — Python orchestrator"
 requires-python = ">=3.11"
 dependencies = [
-    "redis>=5.0",
     "pyyaml>=6.0",
     "faster-whisper>=1.0",
     "piper-tts>=1.6",

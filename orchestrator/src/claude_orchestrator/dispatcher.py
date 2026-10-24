@@ -23,7 +23,7 @@ from .live_session import SESSION_PREFIX, LaunchResult, LiveSessions, screen_tex
 from .models import IncomingMessage, OutgoingMessage
 from .outbox import MAX_FILE_SIZE_BYTES, collect_outgoing_files, content_hash8
 from .projects import ProjectScan, render_listing, scan_project_root, sort_key
-from .redis_client import RedisBus
+from .socket_bus import SocketBus
 from .state import PersistedState, load_state, save_state
 from .transcription import Transcriber
 from .tts import Synthesizer
@@ -186,7 +186,7 @@ class Dispatcher:
     def __init__(
         self,
         config: Config,
-        bus: RedisBus,
+        bus: SocketBus,
         transcriber: Transcriber,
         synthesizer: Synthesizer,
         live: LiveSessions,
@@ -298,7 +298,7 @@ class Dispatcher:
         folder that hasn't been switched to yet this run (SPEC.md §7.2).
         Once adopted it behaves exactly like any statically-configured
         project for the rest of this process's lifetime; nothing is
-        persisted to disk, so an untouched folder is simply rediscovered
+        persisted to disk, so an untouched folder is simply found again
         live next time (SPEC.md §7.2)."""
         all_projects = self._all_known_projects()
         if arg.isdigit():

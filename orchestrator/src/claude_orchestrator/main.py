@@ -1,4 +1,4 @@
-"""Entrypoint: wires config, Redis bus, live sessions, transcriber,
+"""Entrypoint: wires config, socket bus, live sessions, transcriber,
 synthesizer and dispatcher together, and runs the event loop (SPEC.md §10)."""
 
 from __future__ import annotations
@@ -11,10 +11,13 @@ from pathlib import Path
 
 from .config import load_config
 from .dispatcher import Dispatcher
-from .redis_client import RedisBus
 from .live_session import LiveSessions
+from .socket_bus import SocketBus, SocketInUse
 from .transcription import Transcriber
 from .tts import Synthesizer
+
+# EX_CONFIG: a configuration problem a restart cannot fix.
+EXIT_CONFIG = 78
 
 LOG_DIR = Path.home() / ".local" / "share" / "claude-orchestrator" / "logs"
 
@@ -38,19 +41,31 @@ def _setup_logging() -> None:
     root.addHandler(stream_handler)
 
 
+async def start_bus(path: Path) -> SocketBus:
+    """Start the socket bus, or exit 78 when the socket path is taken."""
+    bus = SocketBus(path)
+    try:
+        await bus.start()
+    except SocketInUse as exc:
+        logger.error("%s", exc)
+        raise SystemExit(EXIT_CONFIG) from exc
+    except FileExistsError as exc:
+        logger.error("cannot create the socket: %s", exc)
+        raise SystemExit(EXIT_CONFIG) from exc
+    return bus
+
+
 async def _main() -> None:
     _setup_logging()
     config = load_config()
-    bus = RedisBus(config.redis)
+    bus = await start_bus(config.transport.socket_path)
     transcriber = Transcriber(config.whisper)
     synthesizer = Synthesizer(config.tts, config.bridge.outgoing_staging_dir)
     # The hook command each live session runs (hook_relay.py), with this
-    # same interpreter, so it finds this package and its redis client.
+    # same interpreter, so it finds this package.
     relay_command = [
         sys.executable, "-m", "claude_orchestrator.hook_relay",
-        "--redis-host", config.redis.host,
-        "--redis-port", str(config.redis.port),
-        "--channel", config.redis.hooks_channel,
+        "--socket", str(config.transport.socket_path),
     ]  # fmt: skip
     live = LiveSessions(config.remote_control, config.claude_code.binary, relay_command)
     dispatcher = Dispatcher(config, bus, transcriber, synthesizer, live)

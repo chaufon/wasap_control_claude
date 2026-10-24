@@ -1,28 +1,31 @@
 """Claude Code hook command for the live sessions (live_session.py): reads
-one hook event from stdin and publishes it to the orchestrator's Redis hooks
-channel, tagged with the tmux session it came from (SPEC.md §7.7).
+one hook event from stdin and writes it to the orchestrator's socket as one
+`hook` frame (socket_bus.py), tagged with the tmux session it came from
+(SPEC.md §7.7).
 
 On UserPromptSubmit it also consumes the session's pending marker: the
 orchestrator writes one right before typing a WhatsApp message, so the
 prompt that follows is tagged `"origin": "whatsapp"`, and, with voice
 replies on, gets the audio-summary instruction as extra context.
 
-A hook must never break the session, so every failure is logged to stderr
-and the command still exits 0.
+A hook must never break the session, so every failure, bad arguments
+included, is logged to stderr and the command still exits 0.
 """
 
 from __future__ import annotations
 
 import argparse
 import json
+import socket
 import sys
 import time
 from pathlib import Path
 
-import redis
-
 from .live_session import LIVE_DIR, pending_path
 from .voice_summary import VOICE_SUMMARY_SYSTEM_PROMPT
+
+# Seconds to connect to the orchestrator and write the frame.
+SOCKET_TIMEOUT_SECONDS = 2
 
 # A marker older than this belongs to a message that never became a prompt.
 PENDING_MAX_AGE_SECONDS = 30
@@ -45,7 +48,7 @@ def take_pending(path: Path, now: float) -> dict | None:
 
 
 def build(event: dict, session: str, live_dir: Path, now: float) -> tuple[dict, dict | None]:
-    """The message to publish, and the hook's stdout reply (if any)."""
+    """The message to send, and the hook's stdout reply (if any)."""
     message = {key: event[key] for key in _FORWARDED_FIELDS if key in event}
     message["live_session"] = session
     reply = None
@@ -63,21 +66,36 @@ def build(event: dict, session: str, live_dir: Path, now: float) -> tuple[dict, 
     return message, reply
 
 
+def send(path: Path, message: dict) -> None:
+    """Write `message` to the orchestrator's socket as one `hook` frame."""
+    frame = json.dumps({"kind": "hook", "data": message}).encode() + b"\n"
+    with socket.socket(socket.AF_UNIX, socket.SOCK_STREAM) as client:
+        client.settimeout(SOCKET_TIMEOUT_SECONDS)
+        client.connect(str(path))
+        client.sendall(frame)
+
+
+class _ArgumentError(Exception):
+    pass
+
+
+class _Parser(argparse.ArgumentParser):
+    def error(self, message: str) -> None:  # type: ignore[override]
+        raise _ArgumentError(message)
+
+
 def main(argv: list[str] | None = None) -> None:
-    parser = argparse.ArgumentParser(description=__doc__)
+    parser = _Parser(description=__doc__)
     parser.add_argument("--session", required=True)
-    parser.add_argument("--redis-host", default="127.0.0.1")
-    parser.add_argument("--redis-port", type=int, default=6379)
-    parser.add_argument("--channel", required=True)
+    parser.add_argument("--socket", type=Path, required=True)
     parser.add_argument("--live-dir", type=Path, default=LIVE_DIR)
-    args = parser.parse_args(argv)
     try:
+        args = parser.parse_args(argv)
         event = json.load(sys.stdin)
         message, reply = build(event, args.session, args.live_dir, time.time())
         if reply is not None:
             print(json.dumps(reply))
-        client = redis.Redis(host=args.redis_host, port=args.redis_port, socket_timeout=2)
-        client.publish(args.channel, json.dumps(message))
+        send(args.socket, message)
     except Exception as exc:  # noqa: BLE001 - a hook must never fail the session
         print(f"claude-orchestrator hook relay: {exc}", file=sys.stderr)
 
