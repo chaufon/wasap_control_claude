@@ -1,0 +1,15 @@
+[Unit]
+Description=Claude Code orchestrator (WhatsApp remote control)
+After=whatsapp-bridge.service
+Requires=whatsapp-bridge.service
+
+[Service]
+Type=simple
+WorkingDirectory=@REPO@/orchestrator
+@ENVIRONMENT@
+ExecStart=@REPO@/orchestrator/.venv/bin/claude-orchestrator
+Restart=on-failure
+RestartSec=5
+
+[Install]
+WantedBy=default.target

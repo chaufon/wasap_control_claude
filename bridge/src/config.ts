@@ -30,7 +30,7 @@ function expandHome(value: string): string {
 export function loadConfig(configPath: string = DEFAULT_CONFIG_PATH): BridgeConfig {
   if (!existsSync(configPath)) {
     throw new Error(
-      `config file not found at ${configPath}. See config/config.example.yaml.`,
+      `config file not found at ${configPath}. See deploy/config.example.yaml.`,
     );
   }
 

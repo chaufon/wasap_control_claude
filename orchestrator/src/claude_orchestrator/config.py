@@ -140,7 +140,7 @@ def load_config(path: Path | None = None) -> Config:
     path = path or DEFAULT_CONFIG_PATH
     if not path.exists():
         raise FileNotFoundError(
-            f"config file not found at {path}. See config/config.example.yaml."
+            f"config file not found at {path}. See deploy/config.example.yaml."
         )
 
     with path.open("r", encoding="utf-8") as fh:
