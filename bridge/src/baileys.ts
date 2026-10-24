@@ -13,6 +13,7 @@ import makeWASocket, {
   downloadMediaMessage,
   fetchLatestBaileysVersion,
   getContentType,
+  isLidUser,
   jidNormalizedUser,
   useMultiFileAuthState,
   type WAMessage,
@@ -24,7 +25,11 @@ import type { BridgeConfig } from './config.js';
 import type { IncomingEvent } from './events.js';
 import type { SocketBus } from './socket.js';
 
-const logger = pino({ level: process.env.LOG_LEVEL ?? 'info' });
+// Pairing mode reserves stdout for the single `PAIRED <jid>` line, so all
+// logs go to stderr there.
+const logger = process.argv.includes('--pair')
+  ? pino({ level: process.env.LOG_LEVEL ?? 'info' }, pino.destination(2))
+  : pino({ level: process.env.LOG_LEVEL ?? 'info' });
 
 const MAX_MESSAGE_LENGTH = 4000;
 
@@ -411,5 +416,87 @@ export async function startBridge(config: BridgeConfig, bus: SocketBus): Promise
     for (const chunk of splitText(event.text ?? '')) {
       await socket.sendMessage(me.pn, { text: chunk });
     }
+  });
+}
+
+const PAIR_MAX_CONNECT_ATTEMPTS = 5;
+const PAIR_RETRY_DELAY_MS = 2_000;
+
+/** Phone-number JID (`<digits>@s.whatsapp.net`, no device suffix) of a linked account. */
+export function phoneJidOf(user: { id: string; phoneNumber?: string } | undefined): string | undefined {
+  if (!user) return undefined;
+  const candidate = isLidUser(user.id) ? user.phoneNumber : user.id;
+  return candidate ? jidNormalizedUser(candidate) : undefined;
+}
+
+/**
+ * Connects to WhatsApp (showing a QR code on stderr when the auth state is
+ * not paired yet), prints `PAIRED <jid>` as the only stdout line, closes the
+ * socket without logging out, and resolves. Rejects on a fatal close.
+ */
+export async function runPairing(config: BridgeConfig): Promise<void> {
+  await mkdir(config.authDir, { recursive: true });
+  const { state, saveCreds } = await useMultiFileAuthState(config.authDir);
+  const { version } = await fetchLatestBaileysVersion();
+
+  await new Promise<void>((resolve, reject) => {
+    let attempts = 0;
+    let settled = false;
+    // Credential writes are serialized and flushed before the process exits,
+    // so an in-flight write can never leave a truncated creds.json behind.
+    let pendingSave: Promise<void> = Promise.resolve();
+
+    const connect = (): void => {
+      const socket = makeWASocket({ auth: state, logger, version });
+      socket.ev.on('creds.update', () => {
+        pendingSave = pendingSave.then(() => saveCreds()).catch((err: unknown) => {
+          logger.error({ err }, 'failed to save credentials');
+        });
+      });
+
+      socket.ev.on('connection.update', async (update) => {
+        const { connection, lastDisconnect, qr } = update;
+        if (settled) return;
+
+        if (qr) {
+          logger.info('scan this QR code with WhatsApp on your phone (Linked Devices):');
+          qrcodeTerminal.generate(qr, { small: true }, (code: string) => {
+            process.stderr.write(`${code}\n`);
+          });
+        }
+
+        if (connection === 'open') {
+          const jid = phoneJidOf(socket.user);
+          settled = true;
+          await pendingSave;
+          if (!jid) {
+            socket.end(undefined);
+            reject(new Error('connected, but WhatsApp did not expose a phone-number JID'));
+            return;
+          }
+          process.stdout.write(`PAIRED ${jid}\n`);
+          socket.end(undefined); // closes the connection; never logout(), which unpairs
+          resolve();
+        } else if (connection === 'close') {
+          const statusCode = (lastDisconnect?.error as Boom | undefined)?.output?.statusCode;
+          logger.warn({ statusCode }, 'connection closed before pairing completed');
+          attempts += 1;
+          if (statusCode === DisconnectReason.loggedOut || attempts >= PAIR_MAX_CONNECT_ATTEMPTS) {
+            settled = true;
+            reject(
+              new Error(
+                statusCode === DisconnectReason.loggedOut
+                  ? 'WhatsApp logged this device out; delete the auth directory and pair again'
+                  : `could not connect to WhatsApp (last status code: ${statusCode})`,
+              ),
+            );
+            return;
+          }
+          setTimeout(connect, PAIR_RETRY_DELAY_MS);
+        }
+      });
+    };
+
+    connect();
   });
 }

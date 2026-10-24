@@ -25,7 +25,17 @@ function expandHome(value: string): string {
   return value;
 }
 
-export function loadConfig(configPath: string = DEFAULT_CONFIG_PATH): BridgeConfig {
+const PLACEHOLDER_SENDER_JID = 'REPLACE_ME@s.whatsapp.net';
+
+export interface LoadConfigOptions {
+  /** When false, a missing or placeholder `allowed_sender_jid` yields an empty string. */
+  requireSender: boolean;
+}
+
+export function loadConfig(
+  configPath: string = DEFAULT_CONFIG_PATH,
+  options: LoadConfigOptions = { requireSender: true },
+): BridgeConfig {
   if (!existsSync(configPath)) {
     throw new Error(
       `config file not found at ${configPath}. See deploy/config.example.yaml.`,
@@ -34,8 +44,11 @@ export function loadConfig(configPath: string = DEFAULT_CONFIG_PATH): BridgeConf
 
   const raw = parse(readFileSync(configPath, 'utf-8')) ?? {};
 
-  const allowedSenderJid = raw?.whatsapp?.allowed_sender_jid;
-  if (!allowedSenderJid) {
+  let allowedSenderJid: string = raw?.whatsapp?.allowed_sender_jid ?? '';
+  if (!options.requireSender && allowedSenderJid === PLACEHOLDER_SENDER_JID) {
+    allowedSenderJid = '';
+  }
+  if (options.requireSender && !allowedSenderJid) {
     throw new Error('config.whatsapp.allowed_sender_jid is required');
   }
 
