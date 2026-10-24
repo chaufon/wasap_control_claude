@@ -1,10 +1,10 @@
 import { startBridge } from './baileys.js';
 import { loadConfig } from './config.js';
-import { RedisBus } from './redis.js';
+import { SocketBus } from './socket.js';
 
 async function main(): Promise<void> {
   const config = loadConfig();
-  const bus = new RedisBus(config);
+  const bus = new SocketBus(config.socketPath);
   await startBridge(config, bus);
 }
 

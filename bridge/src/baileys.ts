@@ -1,7 +1,7 @@
 // WhatsApp connection + self-chat message handling (SPEC.md §4.1, §5).
 //
 // Only messages in the owner's own "Message Yourself" chat are ever
-// forwarded to Redis — every other chat and group is filtered out here,
+// forwarded to the orchestrator — every other chat and group is filtered out here,
 // before anything reaches the orchestrator.
 
 import { randomUUID } from 'node:crypto';
@@ -21,7 +21,8 @@ import makeWASocket, {
 import pino from 'pino';
 import qrcodeTerminal from 'qrcode-terminal';
 import type { BridgeConfig } from './config.js';
-import { RedisBus, type IncomingEvent } from './redis.js';
+import type { IncomingEvent } from './events.js';
+import type { SocketBus } from './socket.js';
 
 const logger = pino({ level: process.env.LOG_LEVEL ?? 'info' });
 
@@ -206,7 +207,7 @@ async function handleMessage(
   msg: WAMessage,
   me: OwnIdentity,
   config: BridgeConfig,
-  bus: RedisBus,
+  bus: SocketBus,
 ): Promise<void> {
   if (!msg.message || !msg.key.remoteJid) return;
 
@@ -314,7 +315,7 @@ interface OwnIdentity {
   lid: string;
 }
 
-export async function startBridge(config: BridgeConfig, bus: RedisBus): Promise<void> {
+export async function startBridge(config: BridgeConfig, bus: SocketBus): Promise<void> {
   await mkdir(config.authDir, { recursive: true });
   await mkdir(config.stagingDir, { recursive: true });
   await mkdir(config.outgoingStagingDir, { recursive: true });

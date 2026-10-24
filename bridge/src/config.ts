@@ -5,13 +5,11 @@ import { existsSync, readFileSync } from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
 import { parse } from 'yaml';
+import { defaultSocketPath } from './socket.js';
 
 export interface BridgeConfig {
   allowedSenderJid: string;
-  redisHost: string;
-  redisPort: number;
-  incomingChannel: string;
-  outgoingChannel: string;
+  socketPath: string;
   authDir: string;
   stagingDir: string;
   outgoingStagingDir: string;
@@ -41,15 +39,12 @@ export function loadConfig(configPath: string = DEFAULT_CONFIG_PATH): BridgeConf
     throw new Error('config.whatsapp.allowed_sender_jid is required');
   }
 
-  const redis = raw?.redis ?? {};
+  const transport = raw?.transport ?? {};
   const bridge = raw?.bridge ?? {};
 
   return {
     allowedSenderJid,
-    redisHost: redis.host ?? '127.0.0.1',
-    redisPort: redis.port ?? 6379,
-    incomingChannel: redis.incoming_channel ?? 'whatsapp:incoming',
-    outgoingChannel: redis.outgoing_channel ?? 'whatsapp:outgoing',
+    socketPath: expandHome(transport.socket_path ?? defaultSocketPath()),
     authDir: expandHome(
       bridge.auth_dir ?? path.join(os.homedir(), '.local', 'share', 'whatsapp-bridge', 'auth'),
     ),

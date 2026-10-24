@@ -1,7 +1,7 @@
 [Unit]
-Description=WhatsApp <-> Redis bridge for Claude Code remote control
-After=network-online.target
-Wants=network-online.target
+Description=WhatsApp <-> Claude Code orchestrator bridge
+After=network-online.target claude-orchestrator.service
+Wants=network-online.target claude-orchestrator.service
 
 [Service]
 Type=simple

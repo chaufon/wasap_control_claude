@@ -1,7 +1,5 @@
 [Unit]
 Description=Claude Code orchestrator (WhatsApp remote control)
-After=whatsapp-bridge.service
-Requires=whatsapp-bridge.service
 
 [Service]
 Type=simple
