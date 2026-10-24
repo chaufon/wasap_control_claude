@@ -11,13 +11,15 @@ target_user() {
     fi
 }
 
-# Run a command as TARGET_USER when root and the target is not root.
+# Run a command as TARGET_USER (default: target_user) from "/" when root and
+# the target is not root.
 as_user() {
     local euid="${CURRENT_EUID:-$EUID}"
-    if [ "$euid" = "0" ] && [ -n "${TARGET_USER:-}" ] && [ "$TARGET_USER" != "root" ]; then
-        sudo -u "$TARGET_USER" -H "$@"
+    local user="${TARGET_USER:-$(target_user)}"
+    if [ "$euid" = "0" ] && [ "$user" != "root" ]; then
+        (cd / && sudo -u "$user" -H "$@")
     else
-        "$@"
+        (cd / && "$@")
     fi
 }
 

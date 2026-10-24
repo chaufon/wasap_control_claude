@@ -1,5 +1,6 @@
 # Node.js detection and private install. Meant to be sourced.
 
+# shellcheck disable=SC2034
 NODE_MIN_MAJOR=20
 NODE_LTS_MAJOR=24
 NODE_DIST_URL="https://nodejs.org/dist/latest-v${NODE_LTS_MAJOR}.x"
@@ -33,7 +34,7 @@ _sha256_of() {
 # Download the official Node LTS build into DEST after checking its SHA-256,
 # then print the path of the node binary. DEST is left untouched on failure.
 install_private_node() {
-    local dest="$1" os ext arch sums tmp name expected actual parent
+    local dest="$1" aside os ext arch sums tmp name expected actual parent
 
     if [ "$(uname -s)" = "Darwin" ]; then
         os=darwin
@@ -82,12 +83,19 @@ install_private_node() {
         rm -rf "$tmp"
         return 1
     fi
-    rm -rf "$dest"
-    if ! mv "$tmp/extract" "$dest"; then
-        echo "Could not move Node into $dest" >&2
+    aside="$dest.old-$$"
+    rm -rf "$aside"
+    if [ -e "$dest" ] && ! mv "$dest" "$aside"; then
+        echo "Could not move the existing $dest aside" >&2
         rm -rf "$tmp"
         return 1
     fi
-    rm -rf "$tmp"
+    if ! mv "$tmp/extract" "$dest"; then
+        echo "Could not move Node into $dest" >&2
+        [ -e "$aside" ] && mv "$aside" "$dest"
+        rm -rf "$tmp"
+        return 1
+    fi
+    rm -rf "$aside" "$tmp"
     echo "$dest/bin/node"
 }

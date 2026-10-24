@@ -190,3 +190,84 @@ def test_libs_parse_under_bash_posix(name):
         [BASH, "--posix", "-n", str(LIB / name)], capture_output=True, text=True
     )
     assert result.returncode == 0, result.stderr
+
+
+def test_as_user_falls_back_to_sudo_user_and_runs_from_root(tmp_path):
+    bin_dir = fake_bin(tmp_path, "sudo", 'printf "%s|" "$@"; pwd')
+    env = {
+        "CURRENT_EUID": "0",
+        "SUDO_USER": "alice",
+        "PATH": f"{bin_dir}:{os.environ['PATH']}",
+    }
+    env_clean = dict(os.environ, **env)
+    env_clean.pop("TARGET_USER", None)
+    result = subprocess.run(
+        [BASH, "-c", f'source {LIB / "user.sh"}; cd {tmp_path}; as_user echo "a b"'],
+        capture_output=True,
+        text=True,
+        env=env_clean,
+    )
+    assert result.stdout == "-u|alice|-H|echo|a b|/\n"
+
+
+def make_node_dist(tmp_path, checksum=None):
+    import hashlib
+    import tarfile
+
+    arch = run("node_arch").stdout.strip()
+    if os.uname().sysname == "Darwin":
+        name, mode = f"node-v24.1.0-darwin-{arch}.tar.gz", "w:gz"
+    else:
+        name, mode = f"node-v24.1.0-linux-{arch}.tar.xz", "w:xz"
+    dist = tmp_path / "dist"
+    dist.mkdir()
+    payload = tmp_path / "payload" / "node-v24.1.0" / "bin"
+    payload.mkdir(parents=True)
+    (payload / "node").write_text("#!/bin/sh\necho v24.1.0\n")
+    (payload / "node").chmod(0o755)
+    tarball = dist / name
+    with tarfile.open(tarball, mode) as tar:
+        tar.add(tmp_path / "payload" / "node-v24.1.0", arcname="node-v24.1.0")
+    digest = checksum or hashlib.sha256(tarball.read_bytes()).hexdigest()
+    (dist / "SHASUMS256.txt").write_text(
+        f"{'0' * 64}  node-v24.1.0-other.tar.xz\n{digest}  {name}\n"
+    )
+    return dist
+
+
+def test_install_private_node_replaces_existing_dest(tmp_path):
+    dist = make_node_dist(tmp_path)
+    dest = tmp_path / "home" / "node"
+    dest.mkdir(parents=True)
+    (dest / "old").write_text("old")
+    result = run(f'NODE_DIST_URL="file://{dist}"; install_private_node {dest}')
+    assert result.returncode == 0, result.stderr
+    assert result.stdout.strip() == f"{dest}/bin/node"
+    assert (dest / "bin" / "node").exists()
+    assert not (dest / "old").exists()
+    assert sorted(p.name for p in dest.parent.iterdir()) == ["node"]
+
+
+def test_install_private_node_mismatch_keeps_existing_dest(tmp_path):
+    dist = make_node_dist(tmp_path, checksum="f" * 64)
+    dest = tmp_path / "home" / "node"
+    dest.mkdir(parents=True)
+    (dest / "old").write_text("old")
+    result = run(f'NODE_DIST_URL="file://{dist}"; install_private_node {dest}')
+    assert result.returncode != 0
+    assert "SHA-256 mismatch" in result.stderr
+    assert (dest / "old").read_text() == "old"
+    assert sorted(p.name for p in dest.parent.iterdir()) == ["node"]
+
+
+def test_ensure_uv_fails_loudly_when_download_fails(tmp_path):
+    bin_dir = fake_bin(tmp_path, "curl", "exit 22")
+    (tmp_path / "home").mkdir()
+    env = {
+        "PATH": f"{bin_dir}:/usr/bin:/bin",
+        "TARGET_USER": CURRENT_USER,
+        "HOME": str(tmp_path / "home"),
+    }
+    result = run("user_home() { echo $HOME; }; ensure_uv", env=env)
+    assert result.returncode == 1
+    assert "Could not install uv" in result.stderr

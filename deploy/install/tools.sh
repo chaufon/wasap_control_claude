@@ -11,15 +11,35 @@ _find_tool() {
     printf '%s\n' "$found"
 }
 
+# Download the installer at URL to a temp file, run it with SHELL_BIN as the
+# target user, and remove it. Returns non-zero on any failure.
+_run_installer() {
+    local url="$1" shell_bin="$2" file status=0
+    file=$(mktemp "${TMPDIR:-/tmp}/installer.XXXXXX") || return 1
+    if curl -fsSL -o "$file" "$url" && chmod 755 "$file"; then
+        as_user "$shell_bin" "$file" >&2 || status=$?
+    else
+        status=1
+    fi
+    rm -f "$file"
+    return "$status"
+}
+
 # Install uv for the target user if missing, then print its path.
 ensure_uv() {
     local found
     found=$(_find_tool uv)
     if [ -z "$found" ]; then
-        as_user sh -c 'curl -fsSL https://astral.sh/uv/install.sh | sh' >&2 || return 1
+        if ! _run_installer https://astral.sh/uv/install.sh sh; then
+            echo "Could not install uv" >&2
+            return 1
+        fi
         found=$(_find_tool uv)
     fi
-    [ -n "$found" ] || return 1
+    if [ -z "$found" ]; then
+        echo "Could not install uv" >&2
+        return 1
+    fi
     echo "$found"
 }
 
@@ -28,10 +48,16 @@ ensure_claude() {
     local found
     found=$(_find_tool claude)
     if [ -z "$found" ]; then
-        as_user bash -c 'curl -fsSL https://claude.ai/install.sh | bash' >&2 || return 1
+        if ! _run_installer https://claude.ai/install.sh bash; then
+            echo "Could not install Claude Code" >&2
+            return 1
+        fi
         found=$(_find_tool claude)
     fi
-    [ -n "$found" ] || return 1
+    if [ -z "$found" ]; then
+        echo "Could not install Claude Code" >&2
+        return 1
+    fi
     echo "$found"
 }
 
