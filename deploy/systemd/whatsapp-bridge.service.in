@@ -6,13 +6,13 @@ Wants=network-online.target claude-orchestrator.service
 [Service]
 Type=simple
 WorkingDirectory=@REPO@/bridge
-# node is nvm-managed (not at /usr/bin/node); systemd --user units don't
-# source .bashrc/nvm.sh, so this must be an absolute path. Update it after
-# `nvm install`-ing a different default: `nvm which default` prints the
-# current target.
+# install.sh renders the absolute path of the Node binary it chose (system
+# Node >= 20, or its private copy); systemd --user units do not read shell
+# profiles, so a bare `node` would not be found.
 ExecStart=@NODE@ dist/index.js
 Restart=on-failure
 RestartSec=5
+RestartPreventExitStatus=78
 Environment=LOG_LEVEL=info
 
 [Install]
