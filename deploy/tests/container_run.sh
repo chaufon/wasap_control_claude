@@ -19,13 +19,18 @@ run_step() {
     "$@" || fail
 }
 
+# sudo and git are the brief's base packages. tar is for the harness's own copy
+# of the repo (not the installer) and is added only where the image lacks it.
 install_base() {
     # shellcheck source=/dev/null
     . /etc/os-release
     case "$ID" in
-        ubuntu | debian) apt-get update && apt-get install -y sudo git tar ca-certificates ;;
+        ubuntu | debian)
+            export DEBIAN_FRONTEND=noninteractive
+            apt-get update && apt-get install -y sudo git
+            ;;
         fedora) dnf install -y sudo git tar ;;
-        arch) pacman -Sy --noconfirm sudo git tar ;;
+        arch) pacman -Sy --noconfirm sudo git ;;
         *) echo "unsupported image: $ID"; return 1 ;;
     esac
 }

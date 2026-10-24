@@ -56,7 +56,8 @@ for image in $IMAGES; do
     if [ "$status" = 0 ] && [ "$(tail -n 1 "$log")" = "OK $image" ]; then
         echo "OK $image (${elapsed}s)"
     else
-        grep '^FAIL ' "$log" | tail -n 1 || echo "FAIL $image: docker run exited $status"
+        line=$(grep '^FAIL ' "$log" | tail -n 1)
+        echo "${line:-FAIL $image: docker run exited $status}"
         echo "    last log lines:"
         tail -n 15 "$log" | sed 's/^/    | /'
         failed=1
