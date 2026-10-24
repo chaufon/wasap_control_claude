@@ -84,12 +84,14 @@ class _Connection:
                 await self.writer.drain()
         except (ConnectionError, OSError) as exc:
             logger.info("bridge connection lost while sending: %s", exc)
-            self.writer.close()
+            self.close()
 
     def close(self) -> None:
-        if self._sender is not None:
+        """Drop the connection at once, discarding unsent data. The peer
+        sees EOF, and the read loop in SocketBus._handle ends."""
+        if self._sender is not None and self._sender is not asyncio.current_task():
             self._sender.cancel()
-        self.writer.close()
+        self.writer.transport.abort()
 
 
 class SocketBus:

@@ -9,6 +9,7 @@ from typing import TYPE_CHECKING
 
 import pytest
 
+from claude_orchestrator import socket_bus
 from claude_orchestrator.main import start_bus
 from claude_orchestrator.models import IncomingMessage, OutgoingMessage
 from claude_orchestrator.socket_bus import SocketBus, SocketInUse, default_socket_path
@@ -26,7 +27,7 @@ def _line(frame: object) -> bytes:
 
 
 async def _connect(path: Path, *frames: object) -> tuple[asyncio.StreamReader, asyncio.StreamWriter]:
-    reader, writer = await asyncio.open_unix_connection(str(path), limit=1024 * 1024)
+    reader, writer = await asyncio.open_unix_connection(str(path), limit=4 * 1024 * 1024)
     for frame in frames:
         writer.write(_line(frame))
     await writer.drain()
@@ -48,7 +49,7 @@ def _with_bus(tmp_path: Path, scenario: Callable[[SocketBus, Path], Awaitable[No
         try:
             await scenario(bus, path)
         finally:
-            await bus.close()
+            await asyncio.wait_for(bus.close(), 5)
 
     asyncio.run(run())
 
@@ -116,22 +117,57 @@ def test_outgoing_without_bridge_is_dropped(tmp_path: Path) -> None:
     _with_bus(tmp_path, scenario)
 
 
-def test_a_stalled_bridge_does_not_block_the_others(tmp_path: Path) -> None:
-    """A bridge that never reads does not hold up publish_outgoing or the
-    bridges that do read."""
+# Large enough that one frame fills the kernel buffer and the transport's
+# write buffer, so a client that never reads stalls the sender.
+BIG = OutgoingMessage(text="x" * 1_000_000)
+
+
+async def _read_to_eof(reader: asyncio.StreamReader) -> None:
+    """Read until EOF, failing the test if the server never disconnects."""
+    while await asyncio.wait_for(reader.read(1024 * 1024), 5):
+        pass
+
+
+def test_a_stalled_bridge_is_dropped_without_blocking_the_others(
+    tmp_path: Path, monkeypatch: "MonkeyPatch"
+) -> None:
+    """A bridge that never reads holds up neither publish_outgoing nor the
+    bridges that do read; once its queue is full it is disconnected, and
+    close() still returns."""
+    monkeypatch.setattr(socket_bus, "MAX_PENDING_FRAMES", 5)
 
     async def scenario(bus: SocketBus, path: Path) -> None:
-        _, stalled = await _connect(path, HELLO)
+        # Keep the writers referenced: a collected StreamWriter closes its connection.
+        stalled_reader, stalled = await _connect(path, HELLO)
         live_reader, live = await _connect(path, HELLO)
         await _sync(bus, path)
 
-        big = OutgoingMessage(text="x" * 100_000)
-        for _ in range(100):
-            await asyncio.wait_for(bus.publish_outgoing(big), 1)
-        for _ in range(100):
-            assert json.loads(await asyncio.wait_for(live_reader.readline(), 2))["data"] == big.to_dict()
+        for _ in range(30):
+            await asyncio.wait_for(bus.publish_outgoing(BIG), 1)
+            line = await asyncio.wait_for(live_reader.readline(), 5)
+            assert json.loads(line)["data"] == BIG.to_dict()
+        # The dropped bridge has read nothing. close() must not wait for it.
+        await asyncio.wait_for(bus.close(), 5)
+        await _read_to_eof(stalled_reader)
         stalled.close()
         live.close()
+
+    _with_bus(tmp_path, scenario)
+
+
+def test_close_does_not_wait_for_a_client_with_unsent_data(tmp_path: Path) -> None:
+    """close() disconnects a bridge that has unread frames instead of waiting
+    for it to read them."""
+
+    async def scenario(bus: SocketBus, path: Path) -> None:
+        reader, writer = await _connect(path, HELLO)
+        await _sync(bus, path)
+        for _ in range(20):
+            await bus.publish_outgoing(BIG)
+            await asyncio.sleep(0.01)
+        await asyncio.wait_for(bus.close(), 5)
+        await _read_to_eof(reader)
+        writer.close()
 
     _with_bus(tmp_path, scenario)
 
