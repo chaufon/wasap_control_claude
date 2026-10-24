@@ -28,7 +28,7 @@ class PersistedState:
     # message, so unlike claude_enabled this defaults to off.
     voice_enabled: bool = False
     # None means no /project switch has been persisted yet — the dispatcher
-    # falls back to config.default_project in that case.
+    # falls back to config.default_project in that case (or has none).
     active_project: str | None = None
     # project name -> session ID of its shared live session (SPEC.md §7.7),
     # so a session that is started again resumes the same conversation.

@@ -6,12 +6,12 @@ from typing import TYPE_CHECKING
 import pytest
 
 from claude_orchestrator.commands import Command
-from claude_orchestrator.dispatcher import Dispatcher
+from claude_orchestrator.dispatcher import NO_PROJECT_REPLY, Dispatcher
 from claude_orchestrator.live_session import ProcessInfo
 from claude_orchestrator.models import IncomingMessage
 from claude_orchestrator.state import PersistedState
 
-from .conftest import FakeBus, MakeDispatcher
+from .conftest import FakeBus, FakeLive, MakeDispatcher
 
 if TYPE_CHECKING:
     from _pytest.logging import LogCaptureFixture
@@ -228,3 +228,87 @@ def test_help_is_grouped() -> None:
         assert heading in HELP_TEXT
     assert "/new" not in HELP_TEXT
     assert "• /last" in HELP_TEXT and "• /reconnect" in HELP_TEXT
+
+
+def _empty_dispatcher(
+    root: Path, monkeypatch: pytest.MonkeyPatch, state: PersistedState | None = None
+) -> tuple[Dispatcher, FakeBus]:
+    """A Dispatcher with no static projects over a project_root with no folders."""
+    from claude_orchestrator import dispatcher as dispatcher_module
+    from claude_orchestrator.config import Config, WhatsAppConfig
+
+    empty = root / "empty-root"
+    empty.mkdir()
+    persisted = state or PersistedState()
+    monkeypatch.setattr(dispatcher_module, "load_state", lambda: persisted)
+    monkeypatch.setattr(dispatcher_module, "save_state", lambda state: None)
+    config = Config(whatsapp=WhatsAppConfig(allowed_sender_jid="me"), project_root=empty)
+    bus = FakeBus()
+    return Dispatcher(config, bus, None, None, FakeLive(root)), bus  # type: ignore[arg-type]
+
+
+def _incoming(type_: str = "text", **fields: object) -> IncomingMessage:
+    return IncomingMessage(
+        message_id="m2", timestamp="t", sender_jid="me", type=type_, **fields  # type: ignore[arg-type]
+    )
+
+
+def test_message_without_active_project_gets_no_project_reply(
+    root: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    dispatcher, bus = _empty_dispatcher(root, monkeypatch)
+    asyncio.run(dispatcher._handle(_incoming(text="hello")))
+    assert bus.texts == [NO_PROJECT_REPLY]
+
+
+def test_voice_without_active_project_is_not_transcribed(
+    root: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    dispatcher, bus = _empty_dispatcher(root, monkeypatch)
+    asyncio.run(dispatcher._handle(_incoming("voice", media_path="/tmp/x.ogg")))
+    assert bus.texts == [NO_PROJECT_REPLY]
+
+
+def test_attachment_without_active_project_gets_no_project_reply(
+    root: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    dispatcher, bus = _empty_dispatcher(root, monkeypatch)
+    asyncio.run(dispatcher._handle(_incoming("attachment", media_path="/tmp/x.png")))
+    assert bus.texts == [NO_PROJECT_REPLY]
+
+
+def test_stale_persisted_project_without_fallback_gets_no_project_reply(
+    root: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    dispatcher, bus = _empty_dispatcher(root, monkeypatch, PersistedState(active_project="gone"))
+    asyncio.run(dispatcher._handle(_incoming(text="hello")))
+    assert bus.texts == [NO_PROJECT_REPLY]
+
+
+@pytest.mark.parametrize("name", ["stop", "last", "close", "reconnect"])
+def test_active_project_commands_without_project_reply_no_project(
+    root: Path, monkeypatch: pytest.MonkeyPatch, name: str
+) -> None:
+    dispatcher, bus = _empty_dispatcher(root, monkeypatch)
+    assert _run_all(dispatcher, bus, name) == [NO_PROJECT_REPLY]
+
+
+def test_c_command_without_project_replies_no_project(
+    root: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    dispatcher, bus = _empty_dispatcher(root, monkeypatch)
+    assert _run_all(dispatcher, bus, "c", "/usage") == [NO_PROJECT_REPLY]
+
+
+def test_status_and_projects_work_without_project(
+    root: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    dispatcher, bus = _empty_dispatcher(root, monkeypatch)
+    assert "• Project: none" in _run(dispatcher, bus, "status")
+    assert "Active: none" in _run(dispatcher, bus, "projects")
+
+
+def test_create_works_without_project(root: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    dispatcher, bus = _empty_dispatcher(root, monkeypatch)
+    assert "Created and switched to project 'first'" in _run(dispatcher, bus, "create", "first")
+    assert dispatcher._active_project == "first"

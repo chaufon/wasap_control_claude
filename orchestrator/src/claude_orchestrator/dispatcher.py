@@ -42,6 +42,9 @@ _VALID_PROJECT_NAME_RE = re.compile(r"^[A-Za-z0-9_-]{1,100}$")
 # text/voice/attachments, which stay silent (SPEC.md §7.1/§7.3).
 _DISABLED_NOTICE = "🔴 Claude Code is disabled. Send /enable first."
 
+# Reply to anything that needs an active project while none is selected.
+NO_PROJECT_REPLY = "No project selected. Send /project <name> or /create <name>."
+
 # Length of the last-answer preview sent after /project.
 _PREVIEW_CHARS = 200
 # A /c slash command that has not become a prompt by then is a built-in
@@ -200,7 +203,7 @@ class Dispatcher:
             p.name: ProjectState(config=p) for p in config.projects
         }
         self._state: PersistedState = load_state()
-        self._active_project = self._restore_active_project()
+        self._active_project: str | None = self._restore_active_project()
         found = self._scan().containers
         for container in config.project_containers:
             if container not in found:
@@ -217,23 +220,27 @@ class Dispatcher:
         if name not in self._projects:
             self._projects[name] = ProjectState(config=ProjectConfig(name=name, path=path))
 
-    def _restore_active_project(self) -> str:
+    @property
+    def active_project(self) -> str | None:
+        return self._active_project
+
+    def _restore_active_project(self) -> str | None:
         """The active project persists across restarts (state.json); fall
         back to config.default_project if the persisted name no longer
         resolves (e.g. removed from config.yaml or its project_root folder
-        deleted)."""
+        deleted). None when no project exists at all."""
         persisted = self._state.active_project
         if persisted is not None:
             all_projects = self._all_known_projects()
             if persisted in all_projects:
                 self._adopt_project(persisted, all_projects[persisted])
                 return persisted
-            logger.warning(
-                "persisted active project %r no longer exists; falling back to %r",
-                persisted,
-                self._config.default_project.name,
-            )
-        return self._config.default_project.name
+            logger.warning("persisted active project %r no longer exists", persisted)
+        default = self._config.default_project
+        if default is None:
+            return None
+        self._adopt_project(default.name, default.path)
+        return default.name
 
     def _set_active_project(self, name: str) -> None:
         self._active_project = name
@@ -396,6 +403,9 @@ class Dispatcher:
                 return
             if not self._state.claude_enabled:
                 return  # personal note/backup content: leave it alone (SPEC.md §7.1)
+            if self._active_project is None:
+                await self._reply(NO_PROJECT_REPLY, message)
+                return
             prefix = await self._build_reply_context(message)
             await self._handle_prompt(prefix + text, message)
             return
@@ -403,6 +413,9 @@ class Dispatcher:
         if message.type == "voice":
             if not self._state.claude_enabled:
                 return  # skip transcription entirely — nothing to do with it while disabled
+            if self._active_project is None:
+                await self._reply(NO_PROJECT_REPLY, message)
+                return
             if not message.media_path:
                 await self._reply("❌ Voice message had no audio attached.", message)
                 return
@@ -418,6 +431,9 @@ class Dispatcher:
         if message.type == "attachment":
             if not self._state.claude_enabled:
                 return  # skip staging entirely — nothing to do with it while disabled
+            if self._active_project is None:
+                await self._reply(NO_PROJECT_REPLY, message)
+                return
             if not message.media_path:
                 await self._reply("❌ Attachment message had no file.", message)
                 return
@@ -435,9 +451,8 @@ class Dispatcher:
             lines = render_listing(
                 self._all_known_projects(), self._scan().containers, self._format_project_line
             )
-            await self._reply(
-                "📁 *Projects*\n" + "\n".join(lines) + f"\n\n▶️ Active: {self._active_project}", message
-            )
+            active = self._active_project or "none"
+            await self._reply("📁 *Projects*\n" + "\n".join(lines) + f"\n\n▶️ Active: {active}", message)
             return
 
         if command.name == "create":
@@ -503,6 +518,9 @@ class Dispatcher:
                 return
             if not command.arg:
                 await self._reply("Usage: /c <text>", message)
+                return
+            if self._active_project is None:
+                await self._reply(NO_PROJECT_REPLY, message)
                 return
             # A slash command goes in alone, so the session still sees it
             # as a command; anything else gets the quoted-message context.
@@ -605,10 +623,22 @@ class Dispatcher:
         """A command's optional project argument, or the active project."""
         return self._resolve_project_name(command.arg) if command.arg else self._active_project
 
-    async def _handle_close(self, command: Command, message: IncomingMessage) -> None:
+    async def _target_project(self, command: Command, message: IncomingMessage) -> str | None:
+        """The project a /close or /reconnect acts on, or None after replying
+        why there is none."""
         name = self._project_arg(command)
         if name is None:
-            await self._reply(f"❌ Unknown project '{command.arg}'. Send /projects for the list.", message)
+            if command.arg:
+                await self._reply(
+                    f"❌ Unknown project '{command.arg}'. Send /projects for the list.", message
+                )
+            else:
+                await self._reply(NO_PROJECT_REPLY, message)
+        return name
+
+    async def _handle_close(self, command: Command, message: IncomingMessage) -> None:
+        name = await self._target_project(command, message)
+        if name is None:
             return
         self._projects[name].queue.clear()
         session = session_name(name)
@@ -618,9 +648,8 @@ class Dispatcher:
             await self._reply(f"⚪ {session} was not running.", message)
 
     async def _handle_reconnect(self, command: Command, message: IncomingMessage) -> None:
-        name = self._project_arg(command)
+        name = await self._target_project(command, message)
         if name is None:
-            await self._reply(f"❌ Unknown project '{command.arg}'. Send /projects for the list.", message)
             return
         session = session_name(name)
         if await self._live.pane_state(session) != "live":
@@ -648,6 +677,9 @@ class Dispatcher:
         """Drop the queued WhatsApp messages and interrupt the running turn,
         wherever it was started."""
         name = self._active_project
+        if name is None:
+            await self._reply(NO_PROJECT_REPLY, message)
+            return
         state = self._projects[name]
         session = session_name(name)
         dropped = len(state.queue)
@@ -667,6 +699,9 @@ class Dispatcher:
 
     async def _handle_last(self, message: IncomingMessage) -> None:
         name = self._active_project
+        if name is None:
+            await self._reply(NO_PROJECT_REPLY, message)
+            return
         answer = self._state.last_answers.get(name)
         if not answer:
             await self._reply(f"💬 No answer yet in '{name}'.", message)
@@ -676,27 +711,35 @@ class Dispatcher:
             await self._reply(f"💬 *Last answer:*\n{chunk}" if index == 0 else chunk, message)
 
     async def _status_text(self) -> str:
-        name = self._active_project
-        state = self._projects[name]
-        session = session_name(name)
-        info = self._live.process(session)
         toggle_label = "🟢 enabled" if self._state.claude_enabled else "🔴 disabled"
         voice_label = "🔊 on" if self._state.voice_enabled else "🔇 off"
-        busy_label = "busy" if state.turn is not None or (info is not None and info.busy) else "idle"
-        if state.queue:
-            busy_label += f", {len(state.queue)} queued"
-        # Full session ID, not truncated: `claude --resume <id>` needs it
-        # verbatim to continue this conversation from a terminal.
-        session_id = (info.session_id if info else None) or self._state.shared_sessions.get(name) or "none yet"
         lines = [
             "📊 *Status*",
             f"• Claude Code: {toggle_label}",
             f"• Voice replies: {voice_label}",
-            f"• Project: {name} ({busy_label})",
-            f"• Session: {session_id}",
         ]
-        if info is not None:
-            lines.append(f"• On the computer: {_attach_command(session)}")
+        name = self._active_project
+        if name is None:
+            lines.append("• Project: none")
+        else:
+            state = self._projects[name]
+            session = session_name(name)
+            info = self._live.process(session)
+            busy_label = (
+                "busy" if state.turn is not None or (info is not None and info.busy) else "idle"
+            )
+            if state.queue:
+                busy_label += f", {len(state.queue)} queued"
+            # Full session ID, not truncated: `claude --resume <id>` needs it
+            # verbatim to continue this conversation from a terminal.
+            session_id = (
+                (info.session_id if info else None)
+                or self._state.shared_sessions.get(name)
+                or "none yet"
+            )
+            lines += [f"• Project: {name} ({busy_label})", f"• Session: {session_id}"]
+            if info is not None:
+                lines.append(f"• On the computer: {_attach_command(session)}")
         lines += ["", "📱 *Remote Control*", *(await self._remote_control_lines())]
         return "\n".join(lines)
 
@@ -738,6 +781,9 @@ class Dispatcher:
         """Queue a WhatsApp prompt for the active project's live session,
         starting the session first when it is not running (SPEC.md §7.7)."""
         name = self._active_project
+        if name is None:
+            await self._reply(NO_PROJECT_REPLY, message)
+            return
         if not await self._ensure_live(name, message):
             return
         state = self._projects[name]
@@ -958,6 +1004,7 @@ class Dispatcher:
             )
 
     async def _stage_attachment(self, message: IncomingMessage) -> str:
+        assert self._active_project is not None
         state = self._projects[self._active_project]
         assert message.media_path is not None
         timestamp = datetime.now(timezone.utc).strftime("%Y-%m-%dT%H-%M-%S")
@@ -971,7 +1018,7 @@ class Dispatcher:
         """Prefix for messages that quote/reply to an earlier one (SPEC.md
         §5.9/§7.6) — applies regardless of this message's own type, since a
         reply can itself be text, voice, or an attachment."""
-        if message.quoted_media_path:
+        if message.quoted_media_path and self._active_project is not None:
             try:
                 state = self._projects[self._active_project]
                 timestamp = datetime.now(timezone.utc).strftime("%Y-%m-%dT%H-%M-%S")

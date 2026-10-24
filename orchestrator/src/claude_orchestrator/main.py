@@ -6,10 +6,12 @@ from __future__ import annotations
 import asyncio
 import logging
 import logging.handlers
+import os
+import shutil
 import sys
 from pathlib import Path
 
-from .config import load_config
+from .config import Config, load_config
 from .dispatcher import Dispatcher
 from .live_session import LiveSessions
 from .socket_bus import SocketBus, SocketInUse
@@ -55,9 +57,35 @@ async def start_bus(path: Path) -> SocketBus:
     return bus
 
 
+def _binary_found(binary: str) -> bool:
+    if os.path.isabs(binary):
+        return os.access(binary, os.X_OK)
+    return shutil.which(binary) is not None
+
+
+def check_runtime(config: Config) -> list[str]:
+    """One problem string per missing binary or unsafe setting; empty when
+    the orchestrator can run."""
+    problems: list[str] = []
+    binary = config.claude_code.binary
+    if not _binary_found(binary):
+        problems.append(f"claude_code.binary {binary!r} is not an executable file or on PATH")
+    for tool in ("tmux", "ffmpeg"):
+        if shutil.which(tool) is None:
+            problems.append(f"{tool} is not on PATH")
+    if os.geteuid() == 0 and config.remote_control.permission_mode == "bypassPermissions":
+        problems.append("permission_mode bypassPermissions cannot run as root; use auto")
+    return problems
+
+
 async def _main() -> None:
     _setup_logging()
     config = load_config()
+    problems = check_runtime(config)
+    for problem in problems:
+        logger.error("%s", problem)
+    if problems:
+        raise SystemExit(EXIT_CONFIG)
     bus = await start_bus(config.transport.socket_path)
     transcriber = Transcriber(config.whisper)
     synthesizer = Synthesizer(config.tts, config.bridge.outgoing_staging_dir)
@@ -71,9 +99,9 @@ async def _main() -> None:
     dispatcher = Dispatcher(config, bus, transcriber, synthesizer, live)
 
     logger.info(
-        "claude-orchestrator started; projects=%s default=%s",
+        "claude-orchestrator started; projects=%s active=%s",
         [p.name for p in config.projects],
-        config.default_project.name,
+        dispatcher.active_project,
     )
     try:
         await dispatcher.run()

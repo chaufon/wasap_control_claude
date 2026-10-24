@@ -8,6 +8,7 @@ WorkingDirectory=@REPO@/orchestrator
 ExecStart=@REPO@/orchestrator/.venv/bin/claude-orchestrator
 Restart=on-failure
 RestartSec=5
+RestartPreventExitStatus=78
 
 [Install]
 WantedBy=default.target

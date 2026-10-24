@@ -9,6 +9,7 @@ from pathlib import Path
 
 import yaml
 
+from .projects import scan_project_root, sort_key
 from .socket_bus import default_socket_path
 
 logger = logging.getLogger(__name__)
@@ -125,10 +126,16 @@ class Config:
     project_containers: tuple[str, ...] = ()
 
     @property
-    def default_project(self) -> ProjectConfig:
-        if not self.projects:
-            raise ValueError("config must define at least one project")
-        return self.projects[0]
+    def default_project(self) -> ProjectConfig | None:
+        """The first static project, else the first folder found under
+        project_root, else None."""
+        if self.projects:
+            return self.projects[0]
+        found = scan_project_root(self.project_root, self.project_containers).projects
+        if not found:
+            return None
+        name = min(found, key=sort_key)
+        return ProjectConfig(name=name, path=found[name])
 
     def project(self, name: str) -> ProjectConfig | None:
         return next((p for p in self.projects if p.name == name), None)
@@ -153,8 +160,6 @@ def load_config(path: Path | None = None) -> Config:
         ProjectConfig(name=p["name"], path=Path(p["path"]).expanduser())
         for p in projects_raw
     ]
-    if not projects:
-        raise ValueError("config.projects must define at least one project")
     for project in projects:
         if not project.path.is_dir():
             raise ValueError(
@@ -172,6 +177,8 @@ def load_config(path: Path | None = None) -> Config:
     project_root_raw = raw.get("project_root")
     project_root = Path(project_root_raw).expanduser() if project_root_raw else None
     project_containers = _parse_project_containers(raw.get("project_containers"), project_root)
+    if not projects and project_root is None:
+        raise ValueError("config must define projects or project_root")
 
     return Config(
         whatsapp=WhatsAppConfig(allowed_sender_jid=whatsapp_raw["allowed_sender_jid"]),
