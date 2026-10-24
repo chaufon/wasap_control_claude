@@ -706,11 +706,15 @@ source = { editable = "." }
 dependencies = [
     { name = "faster-whisper" },
     { name = "langdetect" },
-    { name = "nvidia-cublas-cu12" },
-    { name = "nvidia-cudnn-cu12" },
     { name = "piper-tts" },
     { name = "pyyaml" },
     { name = "redis" },
+]
+
+[package.optional-dependencies]
+cuda = [
+    { name = "nvidia-cublas-cu12" },
+    { name = "nvidia-cudnn-cu12" },
 ]
 
 [package.dev-dependencies]
@@ -722,12 +726,13 @@ dev = [
 requires-dist = [
     { name = "faster-whisper", specifier = ">=1.0" },
     { name = "langdetect", specifier = ">=1.0" },
-    { name = "nvidia-cublas-cu12", specifier = ">=12.9.2.10" },
-    { name = "nvidia-cudnn-cu12", specifier = ">=9.24.0.43" },
+    { name = "nvidia-cublas-cu12", marker = "extra == 'cuda'", specifier = ">=12.9.2.10" },
+    { name = "nvidia-cudnn-cu12", marker = "extra == 'cuda'", specifier = ">=9.24.0.43" },
     { name = "piper-tts", specifier = ">=1.6" },
     { name = "pyyaml", specifier = ">=6.0" },
     { name = "redis", specifier = ">=5.0" },
 ]
+provides-extras = ["cuda"]
 
 [package.metadata.requires-dev]
 dev = [{ name = "pytest", specifier = ">=9.1.1" }]

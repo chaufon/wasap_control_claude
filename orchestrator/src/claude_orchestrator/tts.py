@@ -1,8 +1,7 @@
 """Local text-to-speech for voice replies via Piper (SPEC.md §4.6, §7.4).
 
-Runs on CPU by default — unlike faster-whisper's large-v3 model, Piper is
-fast enough without a GPU, and staying off the GPU avoids VRAM contention
-with that model on this machine's 6 GB laptop GPU.
+Runs on CPU by default: Piper is fast enough without a GPU, and staying off
+the GPU avoids VRAM contention with a CUDA faster-whisper model.
 
 Voice models are downloaded on first use (same behavior as faster-whisper's
 own model download) rather than requiring a separate manual setup step.

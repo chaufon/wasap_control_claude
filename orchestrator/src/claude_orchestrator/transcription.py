@@ -1,8 +1,8 @@
 """Local voice-note transcription via faster-whisper (SPEC.md §4.3, §5.2).
 
-Uses the GPU (`large-v3`, CUDA/CTranslate2) by default, falling back to a
-CPU model only if GPU init fails at runtime (e.g. driver issue) — a
-resilience fallback, not the intended default path.
+Uses the configured model and device (default `medium` on CPU). When the
+model fails to load (e.g. a GPU driver issue), the configured fallback model
+on the fallback device is used instead.
 """
 
 from __future__ import annotations

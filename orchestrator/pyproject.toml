@@ -9,6 +9,10 @@ dependencies = [
     "faster-whisper>=1.0",
     "piper-tts>=1.6",
     "langdetect>=1.0",
+]
+
+[project.optional-dependencies]
+cuda = [
     "nvidia-cublas-cu12>=12.9.2.10",
     "nvidia-cudnn-cu12>=9.24.0.43",
 ]

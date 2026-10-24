@@ -59,8 +59,8 @@ class RemoteControlConfig:
 
 @dataclass(frozen=True)
 class WhisperConfig:
-    model: str = "large-v3"
-    device: str = "cuda"
+    model: str = "medium"
+    device: str = "cpu"
     fallback_device: str = "cpu"
     fallback_model: str = "medium"
 
@@ -88,8 +88,7 @@ class TTSConfig:
         default_factory=lambda: {"en": "en_US-ljspeech-high", "es": "es_AR-daniela-high"}
     )
     # CPU is the intended default: Piper is fast enough without a GPU, and
-    # this avoids VRAM contention with faster-whisper's large-v3 model on
-    # this machine's 6 GB laptop GPU.
+    # this avoids VRAM contention with a CUDA faster-whisper model.
     device: str = "cpu"
     models_dir: Path = field(
         default_factory=lambda: Path.home()
@@ -184,8 +183,8 @@ def load_config(path: Path | None = None) -> Config:
         ),
         remote_control=remote_control,
         whisper=WhisperConfig(
-            model=whisper_raw.get("model", "large-v3"),
-            device=whisper_raw.get("device", "cuda"),
+            model=whisper_raw.get("model", "medium"),
+            device=whisper_raw.get("device", "cpu"),
             fallback_device=whisper_raw.get("fallback_device", "cpu"),
             fallback_model=whisper_raw.get("fallback_model", "medium"),
         ),
