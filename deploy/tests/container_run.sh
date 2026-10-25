@@ -44,7 +44,7 @@ create_tester() {
 
 copy_repo() {
     mkdir /src &&
-        tar -C /repo --exclude=./orchestrator/.venv --exclude=./bridge/node_modules \
+        tar -C /repo --exclude=./control/.venv --exclude=./bridge/node_modules \
             --exclude=./bridge/dist -cf - . | tar -C /src -xf - &&
         chown -R tester:tester /src
 }
@@ -73,8 +73,8 @@ run_pytest() {
         set -e
         export PATH="$HOME/.local/bin:$PATH"
         cd /src
-        UV_PROJECT_ENVIRONMENT="/tmp/venv-$1" uv run --project orchestrator --python "$1" pytest -q
-        UV_PROJECT_ENVIRONMENT="/tmp/venv-$1" uv run --project orchestrator --python "$1" pytest deploy/tests -q
+        UV_PROJECT_ENVIRONMENT="/tmp/venv-$1" uv run --project control --python "$1" pytest -q
+        UV_PROJECT_ENVIRONMENT="/tmp/venv-$1" uv run --project control --python "$1" pytest deploy/tests -q
     ' bash "$py"
 }
 

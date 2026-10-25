@@ -1,0 +1,19 @@
+[Unit]
+Description=wasap-control bridge (WhatsApp <-> wasap-control)
+After=network-online.target wasap-control.service
+Wants=network-online.target wasap-control.service
+
+[Service]
+Type=simple
+WorkingDirectory=@REPO@/bridge
+# install.sh renders the absolute path of the Node binary it chose (system
+# Node >= 20, or its private copy); systemd --user units do not read shell
+# profiles, so a bare `node` would not be found.
+ExecStart="@NODE@" dist/index.js
+Restart=on-failure
+RestartSec=5
+RestartPreventExitStatus=78
+Environment=LOG_LEVEL=info
+
+[Install]
+WantedBy=default.target

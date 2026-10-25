@@ -410,7 +410,7 @@ export async function startBridge(config: BridgeConfig, bus: SocketBus): Promise
         if (delayMs === undefined) {
           logger.error(
             `giving up after ${RECONNECT_MAX_ATTEMPTS} failed reconnect attempts without a stable ` +
-              'connection; run `systemctl --user start whatsapp-bridge.service` once the issue clears',
+              'connection; run `systemctl --user start wasap-control-bridge.service` once the issue clears',
           );
           void shutdown('reconnect attempts exhausted');
           return;

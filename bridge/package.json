@@ -1,5 +1,5 @@
 {
-  "name": "whatsapp-bridge",
+  "name": "wasap-control-bridge",
   "version": "0.1.0",
   "description": "WhatsApp <-> Claude Code orchestrator bridge over a Unix socket",
   "private": true,

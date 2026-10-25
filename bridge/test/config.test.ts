@@ -24,12 +24,12 @@ describe('loadConfig socketPath', () => {
 
   it('ignores a leftover redis section', () => {
     const c = load('whatsapp:\n  allowed_sender_jid: a@b\nredis:\n  host: h\n  port: 1\n');
-    assert.match(c.socketPath, /claude-orchestrator.*\.sock$/);
+    assert.match(c.socketPath, /wasap-control.*\.sock$/);
   });
 
   it('treats an empty socket_path as unset', () => {
     const c = load('whatsapp:\n  allowed_sender_jid: a@b\ntransport:\n  socket_path: ""\n');
-    assert.match(c.socketPath, /claude-orchestrator.*\.sock$/);
+    assert.match(c.socketPath, /wasap-control.*\.sock$/);
   });
 });
 

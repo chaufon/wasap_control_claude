@@ -140,14 +140,14 @@ describe('defaultSocketPath', () => {
 
   it('uses XDG_RUNTIME_DIR, else tmpdir with uid', () => {
     process.env.XDG_RUNTIME_DIR = '/run/user/42';
-    assert.equal(defaultSocketPath(), '/run/user/42/claude-orchestrator.sock');
+    assert.equal(defaultSocketPath(), '/run/user/42/wasap-control.sock');
     process.env.XDG_RUNTIME_DIR = '';
     process.env.TMPDIR = '/var/tmpx';
-    assert.equal(defaultSocketPath(), `/var/tmpx/claude-orchestrator-${process.getuid!()}.sock`);
+    assert.equal(defaultSocketPath(), `/var/tmpx/wasap-control-${process.getuid!()}.sock`);
     process.env.TMPDIR = '';
-    assert.equal(defaultSocketPath(), `/tmp/claude-orchestrator-${process.getuid!()}.sock`);
+    assert.equal(defaultSocketPath(), `/tmp/wasap-control-${process.getuid!()}.sock`);
     delete process.env.XDG_RUNTIME_DIR;
     delete process.env.TMPDIR;
-    assert.equal(defaultSocketPath(), `/tmp/claude-orchestrator-${process.getuid!()}.sock`);
+    assert.equal(defaultSocketPath(), `/tmp/wasap-control-${process.getuid!()}.sock`);
   });
 });

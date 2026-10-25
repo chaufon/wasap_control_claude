@@ -13,7 +13,6 @@ bridge/dist/
 
 # WhatsApp auth credentials — never commit these.
 **/auth_info_baileys/
-**/whatsapp-bridge/auth/
 **/bridge/auth/
 
 # Local secrets — only config.example.yaml is tracked.

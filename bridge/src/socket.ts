@@ -12,18 +12,18 @@ import type { IncomingEvent, OutgoingEvent } from './events.js';
 
 const logger = pino({ level: process.env.LOG_LEVEL ?? 'info' });
 
-const SOCKET_NAME = 'claude-orchestrator.sock';
+const SOCKET_NAME = 'wasap-control.sock';
 const RECONNECT_INITIAL_DELAY_MS = 1_000;
 const RECONNECT_MAX_DELAY_MS = 5_000;
 
-/** `$XDG_RUNTIME_DIR/claude-orchestrator.sock`, else
- * `${TMPDIR:-/tmp}/claude-orchestrator-<uid>.sock`. */
+/** `$XDG_RUNTIME_DIR/wasap-control.sock`, else
+ * `${TMPDIR:-/tmp}/wasap-control-<uid>.sock`. */
 export function defaultSocketPath(): string {
   const runtimeDir = process.env.XDG_RUNTIME_DIR;
   if (runtimeDir) return path.join(runtimeDir, SOCKET_NAME);
   const tmpDir = process.env.TMPDIR || '/tmp';
   const uid = os.userInfo().uid;
-  return path.join(tmpDir, `claude-orchestrator-${uid}.sock`);
+  return path.join(tmpDir, `wasap-control-${uid}.sock`);
 }
 
 type OutgoingHandler = (event: OutgoingEvent) => void | Promise<void>;

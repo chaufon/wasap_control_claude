@@ -17,10 +17,10 @@ async function main(): Promise<void> {
 main().catch((err: unknown) => {
   if (err instanceof ConfigError) {
     // eslint-disable-next-line no-console
-    console.error(`whatsapp-bridge configuration error: ${err.message}`);
+    console.error(`wasap-control-bridge configuration error: ${err.message}`);
   } else {
     // eslint-disable-next-line no-console
-    console.error('whatsapp-bridge failed to start:', err);
+    console.error('wasap-control-bridge failed to start:', err);
   }
   process.exit(exitCodeFor(err));
 });

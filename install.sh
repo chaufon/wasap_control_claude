@@ -19,7 +19,7 @@ $SUDO_USER) installs for root with permission_mode "auto".
 
 Steps: system packages (ffmpeg, tmux, curl; needs root), Node >= 20, uv and
 Claude Code (with `claude auth login` when needed), Python and Node
-dependencies, the config file (~/.config/claude-orchestrator/config.yaml,
+dependencies, the config file (~/.config/wasap-control/config.yaml,
 never overwritten), WhatsApp pairing (QR code, only when no sender is
 configured), linger, and the systemd user units. The repo and Node paths may
 contain spaces but not `"`, `\` or `$`.
@@ -38,9 +38,9 @@ Flags:
   --uninstall   Stop and disable both services and delete their unit files.
                 Keeps the config and the data folders.
   --purge       Implies --uninstall. After one [y/N] confirmation, also
-                deletes ~/.config/claude-orchestrator,
-                ~/.local/share/whatsapp-bridge and
-                ~/.local/share/claude-orchestrator.
+                deletes ~/.config/wasap-control,
+                ~/.local/share/wasap-control-bridge and
+                ~/.local/share/wasap-control.
   --help        Show this help.
 
 Exit codes:
@@ -140,24 +140,24 @@ else
 fi
 HOME_DIR=$(user_home)
 [ -n "$HOME_DIR" ] || die 78 "Could not find the home folder of $TARGET_USER"
-CONFIG="$HOME_DIR/.config/claude-orchestrator/config.yaml"
-PRIVATE_NODE_DIR="$HOME_DIR/.local/share/claude-orchestrator/node"
-VENV_PYTHON="$REPO/orchestrator/.venv/bin/python"
+CONFIG="$HOME_DIR/.config/wasap-control/config.yaml"
+PRIVATE_NODE_DIR="$HOME_DIR/.local/share/wasap-control/node"
+VENV_PYTHON="$REPO/control/.venv/bin/python"
 say "Installing for user $TARGET_USER ($HOME_DIR)"
 
 # --- Uninstall ---------------------------------------------------------------
 
 if [ "$UNINSTALL" = 1 ]; then
     uninstall_units_systemd || die 78 "Could not remove the unit files"
-    say "Removed the claude-orchestrator and whatsapp-bridge services."
+    say "Removed the wasap-control and wasap-control-bridge services."
     if [ "$PURGE" = 1 ]; then
-        data_dirs="$HOME_DIR/.config/claude-orchestrator $HOME_DIR/.local/share/whatsapp-bridge $HOME_DIR/.local/share/claude-orchestrator"
+        data_dirs="$HOME_DIR/.config/wasap-control $HOME_DIR/.local/share/wasap-control-bridge $HOME_DIR/.local/share/wasap-control"
         answer=$(ask "Delete $data_dirs (config, WhatsApp pairing, state)? [y/N] ")
         case "$answer" in
             y|Y|yes|YES|Yes)
-                as_user rm -rf "$HOME_DIR/.config/claude-orchestrator" \
-                    "$HOME_DIR/.local/share/whatsapp-bridge" \
-                    "$HOME_DIR/.local/share/claude-orchestrator" \
+                as_user rm -rf "$HOME_DIR/.config/wasap-control" \
+                    "$HOME_DIR/.local/share/wasap-control-bridge" \
+                    "$HOME_DIR/.local/share/wasap-control" \
                     || die 78 "Could not delete the data folders"
                 say "Deleted the config and data folders."
                 ;;
@@ -270,17 +270,17 @@ fi
 # Run uv sync for the orchestrator, with the cuda extra on a GPU machine.
 uv_sync() {
     if [ "$GPU" = 1 ]; then
-        as_user "$UV" sync --project "$REPO/orchestrator" --extra cuda
+        as_user "$UV" sync --project "$REPO/control" --extra cuda
     else
-        as_user "$UV" sync --project "$REPO/orchestrator"
+        as_user "$UV" sync --project "$REPO/control"
     fi
 }
 
 if [ "$CHECK" = 1 ]; then
-    say "Would run: uv sync --project $REPO/orchestrator$SYNC_EXTRA"
+    say "Would run: uv sync --project $REPO/control$SYNC_EXTRA"
     say "Would run: npm ci && npm run build (in $REPO/bridge, with $NODE)"
 else
-    say "Running: uv sync --project $REPO/orchestrator$SYNC_EXTRA"
+    say "Running: uv sync --project $REPO/control$SYNC_EXTRA"
     uv_sync || die 78 "uv sync failed"
     say "Running: npm ci && npm run build (in $REPO/bridge)"
     as_user env PATH="$(dirname "$NODE"):$PATH" sh -c 'cd "$1" && npm ci && npm run build' sh "$REPO/bridge" \
@@ -289,7 +289,7 @@ fi
 
 # Run the config writer with the orchestrator's Python.
 install_config() {
-    as_user "$VENV_PYTHON" -m claude_orchestrator.install_config "$@"
+    as_user "$VENV_PYTHON" -m wasap_control.install_config "$@"
 }
 
 # Print the config differences from deploy/config.example.yaml, if any.
@@ -347,16 +347,16 @@ if [ "$CHECK" = 1 ]; then
     if [ -e "$CONFIG" ]; then
         say "Config: $CONFIG exists and is kept"
         if [ -x "$VENV_PYTHON" ]; then
-            report_config_diff "$VENV_PYTHON" -m claude_orchestrator.install_config
+            report_config_diff "$VENV_PYTHON" -m wasap_control.install_config
         fi
     elif [ -x "$VENV_PYTHON" ]; then
-        "$VENV_PYTHON" -m claude_orchestrator.install_config write --path "$check_dir/config.yaml" \
+        "$VENV_PYTHON" -m wasap_control.install_config write --path "$check_dir/config.yaml" \
             --project-root "~/projects" --claude-binary "${CLAUDE:-$HOME_DIR/.local/bin/claude}" \
             --whisper-device "$WHISPER_DEVICE" --permission-mode "$PERMISSION_MODE" \
             || die 78 "Could not render the config"
         say "Config: $check_dir/config.yaml"
     else
-        say "Config: not rendered, $REPO/orchestrator/.venv does not exist yet (uv sync creates it)"
+        say "Config: not rendered, $REPO/control/.venv does not exist yet (uv sync creates it)"
     fi
     environment=$(cuda_environment)
     for name in $SYSTEMD_UNITS; do
@@ -387,7 +387,7 @@ fi
 sender=$(install_config get-sender --path "$CONFIG") || die 78 "Could not read $CONFIG"
 if [ -z "$sender" ]; then
     say "Pairing WhatsApp: scan the QR code with WhatsApp > Linked devices."
-    stop_bridge_systemd || die 78 "Could not stop whatsapp-bridge.service"
+    stop_bridge_systemd || die 78 "Could not stop wasap-control-bridge.service"
     pair_output=$(as_user sh -c 'cd "$1" && exec "$2" dist/index.js --pair' sh "$REPO/bridge" "$NODE") \
         || die 78 "WhatsApp pairing failed"
     sender=$(printf '%s\n' "$pair_output" | sed -n 's/^PAIRED //p' | head -n 1)
@@ -414,7 +414,7 @@ wait_user_manager_systemd "$TARGET_USER" \
 
 install_units_systemd "$REPO" "$NODE" "$(cuda_environment)" \
     || die 78 "Could not install or start the services"
-say "Services: claude-orchestrator and whatsapp-bridge started"
+say "Services: wasap-control and wasap-control-bridge started"
 
 if [ "$LOGIN_ONLY" = 1 ]; then
     if ! disable_linger_systemd "$TARGET_USER"; then

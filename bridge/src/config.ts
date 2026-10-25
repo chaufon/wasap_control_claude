@@ -16,8 +16,8 @@ export interface BridgeConfig {
 }
 
 const DEFAULT_CONFIG_PATH =
-  process.env.CLAUDE_ORCHESTRATOR_CONFIG ??
-  path.join(os.homedir(), '.config', 'claude-orchestrator', 'config.yaml');
+  process.env.WASAP_CONTROL_CONFIG ??
+  path.join(os.homedir(), '.config', 'wasap-control', 'config.yaml');
 
 function expandHome(value: string): string {
   if (value === '~') return os.homedir();
@@ -89,13 +89,13 @@ function parseConfig(configPath: string, options: LoadConfigOptions): BridgeConf
     // An empty socket_path means unset, as in the orchestrator.
     socketPath: expandHome(transport.socket_path || defaultSocketPath()),
     authDir: expandHome(
-      bridge.auth_dir ?? path.join(os.homedir(), '.local', 'share', 'whatsapp-bridge', 'auth'),
+      bridge.auth_dir ?? path.join(os.homedir(), '.local', 'share', 'wasap-control-bridge', 'auth'),
     ),
     stagingDir: expandHome(
-      bridge.staging_dir ?? path.join(os.tmpdir(), 'whatsapp-bridge', 'incoming'),
+      bridge.staging_dir ?? path.join(os.tmpdir(), 'wasap-control-bridge', 'incoming'),
     ),
     outgoingStagingDir: expandHome(
-      bridge.outgoing_staging_dir ?? path.join(os.tmpdir(), 'whatsapp-bridge', 'outgoing'),
+      bridge.outgoing_staging_dir ?? path.join(os.tmpdir(), 'wasap-control-bridge', 'outgoing'),
     ),
   };
 }

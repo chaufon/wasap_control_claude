@@ -1,6 +1,6 @@
 # systemd user units and linger. Meant to be sourced after user.sh.
 
-SYSTEMD_UNITS="claude-orchestrator whatsapp-bridge"
+SYSTEMD_UNITS="wasap-control wasap-control-bridge"
 
 # Print TEMPLATE with @REPO@ and @NODE@ replaced. A line that is exactly
 # @ENVIRONMENT@ becomes ENVIRONMENT, or is dropped when ENVIRONMENT is empty.
@@ -86,8 +86,8 @@ install_units_systemd() {
 
 # Stop the bridge service when it is running, so pairing owns the auth state.
 stop_bridge_systemd() {
-    if _systemctl_user_systemd is-active --quiet whatsapp-bridge.service; then
-        _systemctl_user_systemd stop whatsapp-bridge.service
+    if _systemctl_user_systemd is-active --quiet wasap-control-bridge.service; then
+        _systemctl_user_systemd stop wasap-control-bridge.service
     fi
 }
 
@@ -103,8 +103,8 @@ disable_linger_systemd() {
 uninstall_units_systemd() {
     local dir
     dir=$(unit_dir_systemd)
-    _systemctl_user_systemd disable --now whatsapp-bridge.service claude-orchestrator.service \
+    _systemctl_user_systemd disable --now wasap-control-bridge.service wasap-control.service \
         || echo "Could not disable the services (they may not be installed)" >&2
-    as_user rm -f "$dir/whatsapp-bridge.service" "$dir/claude-orchestrator.service" || return 1
+    as_user rm -f "$dir/wasap-control-bridge.service" "$dir/wasap-control.service" || return 1
     _systemctl_user_systemd daemon-reload
 }

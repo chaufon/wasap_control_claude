@@ -1,5 +1,5 @@
-# Copy this file to ~/.config/claude-orchestrator/config.yaml (or set
-# CLAUDE_ORCHESTRATOR_CONFIG to point elsewhere) and fill in your own
+# Copy this file to ~/.config/wasap-control/config.yaml (or set
+# WASAP_CONTROL_CONFIG to point elsewhere) and fill in your own
 # values. Read by both the Python orchestrator and the Node bridge.
 # install.sh writes this file for you.
 
@@ -74,12 +74,12 @@ tts:
   # CPU is intentional: Piper is fast enough without a GPU, and this avoids
   # VRAM contention with whisper.device: cuda on a single GPU.
   device: cpu
-  models_dir: "~/.local/share/claude-orchestrator/piper-voices"
+  models_dir: "~/.local/share/wasap-control/piper-voices"
 
 # The Unix socket the orchestrator listens on and the bridge connects to.
 transport:
-  # null: $XDG_RUNTIME_DIR/claude-orchestrator.sock, else
-  # ${TMPDIR:-/tmp}/claude-orchestrator-<uid>.sock.
+  # null: $XDG_RUNTIME_DIR/wasap-control.sock, else
+  # ${TMPDIR:-/tmp}/wasap-control-<uid>.sock.
   socket_path: null
 
 progress_updates:
@@ -87,8 +87,8 @@ progress_updates:
 
 bridge:
   # Node bridge only.
-  auth_dir: "~/.local/share/whatsapp-bridge/auth"
-  staging_dir: "/tmp/whatsapp-bridge/incoming"
+  auth_dir: "~/.local/share/wasap-control-bridge/auth"
+  staging_dir: "/tmp/wasap-control-bridge/incoming"
   # Shared: the Python orchestrator writes synthesized voice-reply audio
   # here; the Node bridge reads it, sends it, and deletes it.
-  outgoing_staging_dir: "/tmp/whatsapp-bridge/outgoing"
+  outgoing_staging_dir: "/tmp/wasap-control-bridge/outgoing"

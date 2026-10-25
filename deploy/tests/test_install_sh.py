@@ -123,7 +123,7 @@ class Env:
         (self.state / "claude-logged-in").touch()
         (self.state / "venv-python").write_text(
             "#!/bin/sh\n"
-            f'PYTHONPATH="{self.repo / "orchestrator" / "src"}" '
+            f'PYTHONPATH="{self.repo / "control" / "src"}" '
             f'exec "{sys.executable}" "$@"\n'
         )
         self.extra_env = {}
@@ -134,10 +134,10 @@ class Env:
         if (REPO / "install.sh").exists():
             shutil.copy2(REPO / "install.sh", self.repo / "install.sh")
         shutil.copytree(REPO / "deploy", self.repo / "deploy", ignore=ignore)
-        (self.repo / "orchestrator").mkdir()
-        shutil.copy2(REPO / "orchestrator" / "pyproject.toml", self.repo / "orchestrator")
+        (self.repo / "control").mkdir()
+        shutil.copy2(REPO / "control" / "pyproject.toml", self.repo / "control")
         shutil.copytree(
-            REPO / "orchestrator" / "src", self.repo / "orchestrator" / "src", ignore=ignore
+            REPO / "control" / "src", self.repo / "control" / "src", ignore=ignore
         )
         (self.repo / "bridge").mkdir()
         shutil.copy2(REPO / "bridge" / "package.json", self.repo / "bridge")
@@ -162,24 +162,24 @@ class Env:
         (self.bin / name).unlink()
 
     def make_venv(self):
-        venv_bin = self.repo / "orchestrator" / ".venv" / "bin"
+        venv_bin = self.repo / "control" / ".venv" / "bin"
         venv_bin.mkdir(parents=True)
         shutil.copy2(self.state / "venv-python", venv_bin / "python")
         (venv_bin / "python").chmod(0o755)
 
     @property
     def config(self):
-        return self.home / ".config" / "claude-orchestrator" / "config.yaml"
+        return self.home / ".config" / "wasap-control" / "config.yaml"
 
     @property
     def unit_dir(self):
         return self.home / ".config" / "systemd" / "user"
 
     def write_config(self, sender=SENDER):
-        if not (self.repo / "orchestrator" / ".venv").exists():
+        if not (self.repo / "control" / ".venv").exists():
             self.make_venv()
-        py = str(self.repo / "orchestrator" / ".venv" / "bin" / "python")
-        base = [py, "-m", "claude_orchestrator.install_config"]
+        py = str(self.repo / "control" / ".venv" / "bin" / "python")
+        base = [py, "-m", "wasap_control.install_config"]
         subprocess.run(
             base + [
                 "write", "--path", str(self.config), "--project-root", "~/projects",
@@ -256,13 +256,13 @@ def render(template, repo, node, environment):
 
 
 @pytest.mark.parametrize("environment", ['Environment="LD_LIBRARY_PATH=/a/lib:/b/lib"', ""])
-@pytest.mark.parametrize("name", ["claude-orchestrator.service.in", "whatsapp-bridge.service.in"])
+@pytest.mark.parametrize("name", ["wasap-control.service.in", "wasap-control-bridge.service.in"])
 def test_render_unit_substitutes_all_placeholders(name, environment):
     text = render(TEMPLATES / name, "/srv/my repo", "/opt/node/bin/node", environment)
     assert "@" not in text
     assert "RestartPreventExitStatus=78" in text
-    if name.startswith("claude-orchestrator"):
-        assert 'ExecStart="/srv/my repo/orchestrator/.venv/bin/claude-orchestrator"' in text
+    if name == "wasap-control.service.in":
+        assert 'ExecStart="/srv/my repo/control/.venv/bin/wasap-control"' in text
         if environment:
             assert environment + "\n" in text
         else:
@@ -362,7 +362,7 @@ def test_check_writes_nothing_outside_tmp(env):
         if line.startswith(("Config: ", "Unit: "))
     ]
     names = {Path(p).name for p in printed}
-    assert {"config.yaml", "claude-orchestrator.service", "whatsapp-bridge.service"} <= names
+    assert {"config.yaml", "wasap-control.service", "wasap-control-bridge.service"} <= names
     for p in printed:
         assert Path(p).is_file() and Path(p).is_relative_to(env.tmpdir)
         assert "@" not in Path(p).read_text() or Path(p).name == "config.yaml"
@@ -371,8 +371,8 @@ def test_check_writes_nothing_outside_tmp(env):
 def test_check_without_venv_still_renders_units(env):
     result = env.run("--check")
     assert result.returncode == 0, result.stderr
-    assert not (env.repo / "orchestrator" / ".venv").exists()
-    assert "whatsapp-bridge.service" in result.stdout
+    assert not (env.repo / "control" / ".venv").exists()
+    assert "wasap-control-bridge.service" in result.stdout
     assert not (env.home / ".config").exists()
 
 
@@ -401,9 +401,9 @@ def test_fresh_install_asks_project_root_and_pairs(env):
     assert [c for c in env.calls("node") if c.endswith("dist/index.js --pair")]
     assert any(c.startswith("uv sync --project") and "--extra" not in c for c in env.calls("uv"))
     assert "npm ci" in env.calls("npm") and "npm run build" in env.calls("npm")
-    unit = (env.unit_dir / "claude-orchestrator.service").read_text()
+    unit = (env.unit_dir / "wasap-control.service").read_text()
     assert "@" not in unit and "LD_LIBRARY_PATH" not in unit
-    bridge = (env.unit_dir / "whatsapp-bridge.service").read_text()
+    bridge = (env.unit_dir / "wasap-control-bridge.service").read_text()
     assert 'ExecStart="%s" dist/index.js' % (env.bin / "node") in bridge
     assert "loginctl enable-linger" in " ".join(env.calls("loginctl"))
 
@@ -415,9 +415,9 @@ def test_repo_path_with_a_space_reaches_uv_as_one_argument(tmp_path):
     result = env.run(stdin="\n")
     assert result.returncode == 0, result.stderr
     project = (env.state / "uv-project").read_text().rstrip("\n")
-    assert project == str(env.repo / "orchestrator")
+    assert project == str(env.repo / "control")
     assert any(c.endswith("--extra cuda") for c in env.calls("uv") if c.startswith("uv sync"))
-    assert (env.repo / "orchestrator" / ".venv" / "bin" / "python").exists()
+    assert (env.repo / "control" / ".venv" / "bin" / "python").exists()
 
 
 def test_fresh_install_default_project_root_on_empty_answer(env):
@@ -432,7 +432,7 @@ def test_rerun_keeps_config_and_skips_pairing(env):
     env.write_config()
     before = env.config.read_bytes()
     env.unit_dir.mkdir(parents=True)
-    (env.unit_dir / "whatsapp-bridge.service").write_text("stale\n")
+    (env.unit_dir / "wasap-control-bridge.service").write_text("stale\n")
     result = env.run()
     assert result.returncode == 0, result.stderr
     assert env.config.read_bytes() == before
@@ -440,8 +440,8 @@ def test_rerun_keeps_config_and_skips_pairing(env):
     systemctl = env.calls("systemctl")
     assert any(" restart " in f" {c} " for c in systemctl), systemctl
     assert "systemctl --user daemon-reload" in systemctl
-    assert (env.unit_dir / "whatsapp-bridge.service").read_text() != "stale\n"
-    assert "@" not in (env.unit_dir / "claude-orchestrator.service").read_text()
+    assert (env.unit_dir / "wasap-control-bridge.service").read_text() != "stale\n"
+    assert "@" not in (env.unit_dir / "wasap-control.service").read_text()
 
 
 def test_pairing_stops_running_bridge_first(env):
@@ -451,7 +451,7 @@ def test_pairing_stops_running_bridge_first(env):
     result = env.run()
     assert result.returncode == 0, result.stderr
     log = env.calls()
-    stop = log.index("systemctl --user stop whatsapp-bridge.service")
+    stop = log.index("systemctl --user stop wasap-control-bridge.service")
     pair = next(i for i, c in enumerate(log) if c.startswith("node") and "--pair" in c)
     assert stop < pair
     assert f"allowed_sender_jid: {SENDER}" in env.config.read_text()
@@ -463,7 +463,7 @@ def test_gpu_installs_cuda_extra_and_sets_library_path(env):
     assert result.returncode == 0, result.stderr
     assert any("--extra cuda" in c for c in env.calls("uv") if c.startswith("uv sync"))
     assert "device: cuda" in env.config.read_text()
-    unit = (env.unit_dir / "claude-orchestrator.service").read_text()
+    unit = (env.unit_dir / "wasap-control.service").read_text()
     try:
         import nvidia  # noqa: F401
 
@@ -481,7 +481,7 @@ def test_gpu_installs_cuda_extra_and_sets_library_path(env):
 
 def test_old_system_node_uses_private_node(env):
     env.extra_env["FAKE_NODE_VERSION"] = "v18.19.0"
-    private = env.home / ".local" / "share" / "claude-orchestrator" / "node" / "bin"
+    private = env.home / ".local" / "share" / "wasap-control" / "node" / "bin"
     private.mkdir(parents=True)
     shutil.copy2(env.bin / "node", private / "node")
     shutil.copy2(env.bin / "npm", private / "npm")
@@ -493,7 +493,7 @@ def test_old_system_node_uses_private_node(env):
     )
     result = env.run()
     assert result.returncode == 0, result.stderr
-    bridge = (env.unit_dir / "whatsapp-bridge.service").read_text()
+    bridge = (env.unit_dir / "wasap-control-bridge.service").read_text()
     assert 'ExecStart="%s" dist/index.js' % (private / "node") in bridge
 
 
@@ -573,11 +573,11 @@ def make_installed(env):
     env.make_venv()
     env.write_config()
     env.unit_dir.mkdir(parents=True)
-    for name in ("claude-orchestrator.service", "whatsapp-bridge.service"):
+    for name in ("wasap-control.service", "wasap-control-bridge.service"):
         (env.unit_dir / name).write_text("[Unit]\n")
     for d in (
-        env.home / ".local" / "share" / "whatsapp-bridge",
-        env.home / ".local" / "share" / "claude-orchestrator",
+        env.home / ".local" / "share" / "wasap-control-bridge",
+        env.home / ".local" / "share" / "wasap-control",
     ):
         d.mkdir(parents=True)
         (d / "data").write_text("x")
@@ -588,13 +588,13 @@ def test_uninstall_removes_units_and_keeps_config(env):
     before = env.config.read_bytes()
     result = env.run("--uninstall")
     assert result.returncode == 0, result.stderr
-    assert not (env.unit_dir / "claude-orchestrator.service").exists()
-    assert not (env.unit_dir / "whatsapp-bridge.service").exists()
+    assert not (env.unit_dir / "wasap-control.service").exists()
+    assert not (env.unit_dir / "wasap-control-bridge.service").exists()
     assert env.config.read_bytes() == before
-    assert (env.home / ".local" / "share" / "whatsapp-bridge" / "data").exists()
+    assert (env.home / ".local" / "share" / "wasap-control-bridge" / "data").exists()
     systemctl = env.calls("systemctl")
     assert (
-        "systemctl --user disable --now whatsapp-bridge.service claude-orchestrator.service"
+        "systemctl --user disable --now wasap-control-bridge.service wasap-control.service"
         in systemctl
     )
     assert systemctl[-1] == "systemctl --user daemon-reload"
@@ -606,10 +606,10 @@ def test_purge_confirmed_deletes_data(env):
     result = env.run("--uninstall", "--purge", stdin="y\n")
     assert result.returncode == 0, result.stderr
     assert "[y/N]" in result.stdout + result.stderr
-    assert not (env.home / ".config" / "claude-orchestrator").exists()
-    assert not (env.home / ".local" / "share" / "whatsapp-bridge").exists()
-    assert not (env.home / ".local" / "share" / "claude-orchestrator").exists()
-    assert not (env.unit_dir / "whatsapp-bridge.service").exists()
+    assert not (env.home / ".config" / "wasap-control").exists()
+    assert not (env.home / ".local" / "share" / "wasap-control-bridge").exists()
+    assert not (env.home / ".local" / "share" / "wasap-control").exists()
+    assert not (env.unit_dir / "wasap-control-bridge.service").exists()
 
 
 @pytest.mark.parametrize("answer", ["", "n\n", "whatever\n"])
@@ -618,8 +618,8 @@ def test_purge_declined_keeps_data(env, answer):
     result = env.run("--purge", stdin=answer)
     assert result.returncode == 0, result.stderr
     assert env.config.exists()
-    assert (env.home / ".local" / "share" / "whatsapp-bridge" / "data").exists()
-    assert not (env.unit_dir / "whatsapp-bridge.service").exists()
+    assert (env.home / ".local" / "share" / "wasap-control-bridge" / "data").exists()
+    assert not (env.unit_dir / "wasap-control-bridge.service").exists()
 
 
 def test_install_sh_parses_under_bash_posix():
@@ -633,17 +633,17 @@ def test_install_sh_parses_under_bash_posix():
 
 
 def test_render_unit_keeps_ampersand_in_paths():
-    text = render(TEMPLATES / "whatsapp-bridge.service.in", "/home/a&b", "/opt/n&de/node", "")
+    text = render(TEMPLATES / "wasap-control-bridge.service.in", "/home/a&b", "/opt/n&de/node", "")
     assert "WorkingDirectory=/home/a&b/bridge" in text
     assert 'ExecStart="/opt/n&de/node" dist/index.js' in text
 
 
 def test_render_unit_escapes_percent():
     text = render(
-        TEMPLATES / "claude-orchestrator.service.in", "/srv/50%", "/n", 'Environment="X=/srv/50%/lib"'
+        TEMPLATES / "wasap-control.service.in", "/srv/50%", "/n", 'Environment="X=/srv/50%/lib"'
     )
-    assert "WorkingDirectory=/srv/50%%/orchestrator" in text
-    assert 'ExecStart="/srv/50%%/orchestrator/.venv/bin/claude-orchestrator"' in text
+    assert "WorkingDirectory=/srv/50%%/control" in text
+    assert 'ExecStart="/srv/50%%/control/.venv/bin/wasap-control"' in text
     assert 'Environment="X=/srv/50%%/lib"' in text
 
 
@@ -651,7 +651,7 @@ def test_render_unit_escapes_percent():
 def test_render_unit_rejects_unsupported_characters(bad):
     script = f'source "{REPO / "deploy" / "install" / "systemd.sh"}"\nrender_unit "$1" "$2" /n ""\n'
     result = subprocess.run(
-        [BASH, "-c", script, "bash", str(TEMPLATES / "whatsapp-bridge.service.in"), bad],
+        [BASH, "-c", script, "bash", str(TEMPLATES / "wasap-control-bridge.service.in"), bad],
         capture_output=True, text=True,
     )
     assert result.returncode == 1
@@ -722,13 +722,13 @@ def test_system_node_without_npm_uses_private_node(env):
     bare.mkdir()
     shutil.copy2(env.bin / "node", bare / "node")
     env.extra_env["PATH"] = f"{bare}:{env.bin}:{env.sysbin}"
-    private = env.home / ".local" / "share" / "claude-orchestrator" / "node" / "bin"
+    private = env.home / ".local" / "share" / "wasap-control" / "node" / "bin"
     private.mkdir(parents=True)
     shutil.copy2(env.bin / "node", private / "node")
     shutil.copy2(env.bin / "npm", private / "npm")
     result = env.run()
     assert result.returncode == 0, result.stderr
-    bridge = (env.unit_dir / "whatsapp-bridge.service").read_text()
+    bridge = (env.unit_dir / "wasap-control-bridge.service").read_text()
     assert 'ExecStart="%s" dist/index.js' % (private / "node") in bridge
 
 

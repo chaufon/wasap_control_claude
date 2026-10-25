@@ -46,14 +46,14 @@ The script:
    Code is not logged in, it runs `claude auth login`.
 2. Installs the Python and Node dependencies and builds the bridge.
 3. Asks for the folder that holds your projects (`project_root`, default
-   `~/projects`) and writes `~/.config/claude-orchestrator/config.yaml`. An
+   `~/projects`) and writes `~/.config/wasap-control/config.yaml`. An
    existing config is kept; the script lists keys that are missing from it
    or obsolete.
 4. Pairs WhatsApp when no sender is configured: scan the QR code with
    WhatsApp > Linked devices. Your number is written to the config.
 5. Turns on linger, so the services run from boot.
-6. Writes, enables and starts `claude-orchestrator.service` and
-   `whatsapp-bridge.service`.
+6. Writes, enables and starts `wasap-control.service` and
+   `wasap-control-bridge.service`.
 
 Run `./install.sh` again after `git pull`. It keeps the config and the
 pairing, rewrites the units and restarts the services.
@@ -74,9 +74,9 @@ pairing, rewrites the units and restarts the services.
 --uninstall   Stop and disable both services and delete their unit files.
               Keeps the config and the data folders.
 --purge       Implies --uninstall. After one [y/N] confirmation, also
-              deletes ~/.config/claude-orchestrator,
-              ~/.local/share/whatsapp-bridge and
-              ~/.local/share/claude-orchestrator.
+              deletes ~/.config/wasap-control,
+              ~/.local/share/wasap-control-bridge and
+              ~/.local/share/wasap-control.
 --help        Show this help.
 ```
 
@@ -87,10 +87,10 @@ be combined with `--check` or `--login-only` (exit code 2).
 
 ## Configure
 
-Edit `~/.config/claude-orchestrator/config.yaml`, then restart both services:
+Edit `~/.config/wasap-control/config.yaml`, then restart both services:
 
 ```bash
-systemctl --user restart claude-orchestrator.service whatsapp-bridge.service
+systemctl --user restart wasap-control.service wasap-control-bridge.service
 ```
 
 `deploy/config.example.yaml` explains every key. The main ones:
@@ -117,11 +117,11 @@ systemctl --user restart claude-orchestrator.service whatsapp-bridge.service
 Logs:
 
 ```bash
-journalctl --user -u claude-orchestrator.service -f
-journalctl --user -u whatsapp-bridge.service -f
+journalctl --user -u wasap-control.service -f
+journalctl --user -u wasap-control-bridge.service -f
 ```
 
-The orchestrator also writes `~/.local/share/claude-orchestrator/logs/orchestrator.log`.
+The service also writes `~/.local/share/wasap-control/logs/wasap-control.log`.
 
 If the orchestrator exits with code 78 (a configuration error such as a
 missing or invalid `config.yaml`, missing `claude`, `tmux` or `ffmpeg`,
@@ -131,24 +131,24 @@ and when WhatsApp logs the device out. Fix the cause in the log, then restart
 the service.
 
 After 10 failed reconnects to WhatsApp the bridge exits, and systemd does not
-restart it. Start it again with `systemctl --user start whatsapp-bridge.service`
+restart it. Start it again with `systemctl --user start wasap-control-bridge.service`
 once the network is back.
 
 To pair again (for example after WhatsApp logged the device out):
 
-1. Stop the bridge: `systemctl --user stop whatsapp-bridge.service`. The
+1. Stop the bridge: `systemctl --user stop wasap-control-bridge.service`. The
    service and `--pair` must never use the auth folder at the same time.
 2. Move the auth folder aside:
-   `mv ~/.local/share/whatsapp-bridge/auth ~/.local/share/whatsapp-bridge/auth.old`.
+   `mv ~/.local/share/wasap-control-bridge/auth ~/.local/share/wasap-control-bridge/auth.old`.
    Delete `auth.old` once the new pairing works.
 3. In `bridge/`, run `node dist/index.js --pair` with the Node binary from the
-   `ExecStart=` line of `whatsapp-bridge.service`. Scan the QR code. It prints
+   `ExecStart=` line of `wasap-control-bridge.service`. Scan the QR code. It prints
    `PAIRED <jid>` and does not change the config.
 4. If you paired a different number, set `whatsapp.allowed_sender_jid` to the
    printed `<jid>`, or run
-   `orchestrator/.venv/bin/python -m claude_orchestrator.install_config set-sender --path ~/.config/claude-orchestrator/config.yaml --jid <jid>`.
+   `control/.venv/bin/python -m wasap_control.install_config set-sender --path ~/.config/wasap-control/config.yaml --jid <jid>`.
 5. Restart both services:
-   `systemctl --user restart claude-orchestrator.service whatsapp-bridge.service`.
+   `systemctl --user restart wasap-control.service wasap-control-bridge.service`.
 
 ## Using it
 
@@ -214,7 +214,7 @@ service needs it.
 ## Development
 
 ```
-orchestrator/            Python orchestrator (src/claude_orchestrator, tests)
+control/                           Python orchestrator (src/wasap_control, tests)
 bridge/                  Node/TypeScript WhatsApp bridge (src, test)
 install.sh               installer
 deploy/install/          installer functions
@@ -227,9 +227,9 @@ docs/architecture.md     components, socket protocol, config, data, services
 Tests:
 
 ```bash
-cd orchestrator && uv run pytest -q                       # without a GPU
-cd orchestrator && uv run --extra cuda pytest -q          # with the cuda extra
-uv run --project orchestrator pytest deploy/tests -q      # installer, from the repo root (add --extra cuda with a GPU)
+cd control && uv run pytest -q                       # without a GPU
+cd control && uv run --extra cuda pytest -q          # with the cuda extra
+uv run --project control pytest deploy/tests -q      # installer, from the repo root (add --extra cuda with a GPU)
 cd bridge && npm test && npm run build                    # bridge
 deploy/tests/containers.sh                                # Ubuntu, Fedora, Arch and Node 20 containers; needs Docker
 ```

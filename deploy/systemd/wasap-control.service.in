@@ -1,0 +1,14 @@
+[Unit]
+Description=wasap-control: Claude Code remote control via WhatsApp
+
+[Service]
+Type=simple
+WorkingDirectory=@REPO@/control
+@ENVIRONMENT@
+ExecStart="@REPO@/control/.venv/bin/wasap-control"
+Restart=on-failure
+RestartSec=5
+RestartPreventExitStatus=78
+
+[Install]
+WantedBy=default.target
