@@ -21,8 +21,8 @@ import makeWASocket, {
 import pino from 'pino';
 import qrcodeTerminal from 'qrcode-terminal';
 import { AuthWriteTracker } from './auth-drain.js';
-import { useAtomicMultiFileAuthState } from './auth-state.js';
-import type { BridgeConfig } from './config.js';
+import { ensurePrivateDir, useAtomicMultiFileAuthState } from './auth-state.js';
+import { type BridgeConfig, EXIT_CONFIG } from './config.js';
 import type { IncomingEvent } from './events.js';
 import type { SocketBus } from './socket.js';
 
@@ -335,7 +335,7 @@ async function openTrackedAuthState(authDir: string) {
 }
 
 export async function startBridge(config: BridgeConfig, bus: SocketBus): Promise<void> {
-  await mkdir(config.authDir, { recursive: true });
+  await ensurePrivateDir(config.authDir);
   await mkdir(config.stagingDir, { recursive: true });
   await mkdir(config.outgoingStagingDir, { recursive: true });
 
@@ -348,19 +348,18 @@ export async function startBridge(config: BridgeConfig, bus: SocketBus): Promise
   const reconnectBackoff = new ReconnectBackoff();
 
   // Ends the WhatsApp connection, waits for pending auth state writes, closes
-  // the orchestrator socket, and exits: 0 when every write finished, 1 when
-  // a write failed or the drain timed out.
-  const shutdown = async (reason: string): Promise<void> => {
+  // the orchestrator socket, and exits with `exitCode`. A failed write or a
+  // drain timeout turns an exit code of 0 into 1.
+  const shutdown = async (reason: string, exitCode = 0): Promise<void> => {
     if (shuttingDown) return;
     shuttingDown = true;
     logger.info({ reason }, 'shutting down');
-    let exitCode = 0;
     try {
       await socket?.end(undefined);
       await tracker.drain();
     } catch (err) {
       logger.error({ err }, 'auth state writes did not complete before exit');
-      exitCode = 1;
+      if (exitCode === 0) exitCode = 1;
     }
     await bus.close().catch(() => undefined);
     process.exit(exitCode);
@@ -398,7 +397,13 @@ export async function startBridge(config: BridgeConfig, bus: SocketBus): Promise
         const shouldReconnect = statusCode !== DisconnectReason.loggedOut;
         logger.warn({ statusCode, shouldReconnect }, 'connection closed');
         if (!shouldReconnect) {
-          logger.error('logged out — delete the auth directory and re-pair to continue');
+          // Exit 78 so systemd does not restart a bridge that cannot log in.
+          logger.error(
+            `WhatsApp logged this device out; move ${config.authDir} aside ` +
+              `(for example to ${config.authDir}.old) and re-pair with ` +
+              '`node dist/index.js --pair` (see README)',
+          );
+          void shutdown('logged out', EXIT_CONFIG);
           return;
         }
         const delayMs = reconnectBackoff.nextDelayMs();
@@ -478,7 +483,7 @@ export function phoneJidOf(user: { id: string; phoneNumber?: string } | undefine
  * auth state write, or a drain that does not finish in time.
  */
 export async function runPairing(config: BridgeConfig): Promise<void> {
-  await mkdir(config.authDir, { recursive: true });
+  await ensurePrivateDir(config.authDir);
   const { auth, tracker, saveCreds } = await openTrackedAuthState(config.authDir);
   const { version } = await fetchLatestBaileysVersion();
 
@@ -527,7 +532,7 @@ export async function runPairing(config: BridgeConfig): Promise<void> {
             void finish(socket, () => {
               throw new Error(
                 statusCode === DisconnectReason.loggedOut
-                  ? 'WhatsApp logged this device out; delete the auth directory and pair again'
+                  ? `WhatsApp logged this device out; move ${config.authDir} aside and pair again`
                   : `could not connect to WhatsApp (last status code: ${statusCode})`,
               );
             });

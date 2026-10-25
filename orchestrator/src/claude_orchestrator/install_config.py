@@ -11,9 +11,11 @@ The files are rewritten with yaml.safe_dump, so comments are not preserved.
 """
 
 import argparse
+import contextlib
 import copy
 import os
 import sys
+import tempfile
 from collections.abc import Sequence
 from pathlib import Path
 
@@ -38,13 +40,41 @@ def _load_yaml(path: Path) -> dict:
 
 
 def _save_yaml(path: Path, data: dict) -> None:
-    """Write `data` to `path` with mode 0600, creating parent directories."""
+    """Write `data` to `path` with mode 0600, creating parent directories.
+
+    The text goes to a temp file in the same directory, is fsynced, and
+    replaces `path` in one rename, so a crash leaves either the old or the
+    new file, never a partial one.
+    """
     path.parent.mkdir(parents=True, exist_ok=True)
     text = yaml.safe_dump(data, sort_keys=False, allow_unicode=True)
-    fd = os.open(path, os.O_WRONLY | os.O_CREAT | os.O_TRUNC, 0o600)
-    with os.fdopen(fd, "w", encoding="utf-8") as fh:
-        fh.write(text)
-    path.chmod(0o600)
+    # mkstemp creates the file with mode 0600.
+    fd, tmp_name = tempfile.mkstemp(dir=path.parent, prefix=f".{path.name}.", suffix=".tmp")
+    try:
+        with os.fdopen(fd, "w", encoding="utf-8") as fh:
+            fh.write(text)
+            fh.flush()
+            os.fsync(fh.fileno())
+        os.replace(tmp_name, path)
+    except BaseException:
+        with contextlib.suppress(FileNotFoundError):
+            os.unlink(tmp_name)
+        raise
+    _fsync_dir(path.parent)
+
+
+def _fsync_dir(directory: Path) -> None:
+    """Flush a rename in `directory` to disk, where the platform allows it."""
+    try:
+        fd = os.open(directory, os.O_RDONLY)
+    except OSError:
+        return
+    try:
+        os.fsync(fd)
+    except OSError:
+        pass
+    finally:
+        os.close(fd)
 
 
 def _dotted_keys(mapping: dict, prefix: str = "") -> set[str]:

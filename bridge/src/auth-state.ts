@@ -7,7 +7,7 @@
 // file, never an empty or partial one. Operations on one file run one at a
 // time, in call order.
 
-import { mkdir, open, readdir, readFile, rename, stat, unlink } from 'node:fs/promises';
+import { chmod, mkdir, open, readdir, readFile, rename, stat, unlink } from 'node:fs/promises';
 import path from 'node:path';
 import {
   type AuthenticationCreds,
@@ -91,6 +91,16 @@ async function removeStaleTmpFiles(folder: string): Promise<void> {
   }
 }
 
+/**
+ * Creates `dir` (and missing parents) and sets its mode to 0700, so only
+ * the owner can read the WhatsApp credentials in it.
+ */
+export async function ensurePrivateDir(dir: string): Promise<void> {
+  await mkdir(path.dirname(dir), { recursive: true });
+  await mkdir(dir, { recursive: true, mode: 0o700 });
+  await chmod(dir, 0o700);
+}
+
 export function authFileName(file: string): string {
   return file.replace(/\//g, '__').replace(/:/g, '-');
 }
@@ -108,7 +118,7 @@ export async function useAtomicMultiFileAuthState(
       `found something that is not a directory at ${folder}, either delete it or specify a different location`,
     );
   }
-  if (!folderInfo) await mkdir(folder, { recursive: true });
+  await ensurePrivateDir(folder);
   await removeStaleTmpFiles(folder);
 
   const filePathOf = (file: string): string => path.join(folder, authFileName(file));

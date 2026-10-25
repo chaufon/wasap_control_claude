@@ -6,8 +6,10 @@ import subprocess
 import sys
 from pathlib import Path
 
+import pytest
 import yaml
 
+from claude_orchestrator import install_config
 from claude_orchestrator.config import load_config
 from claude_orchestrator.install_config import DEFAULT_EXAMPLE_PATH, main
 
@@ -73,6 +75,37 @@ def test_set_sender_keeps_other_keys(tmp_path):
     before["whatsapp"]["allowed_sender_jid"] = after["whatsapp"]["allowed_sender_jid"]
     assert after == before
     assert stat.S_IMODE(path.stat().st_mode) == 0o600
+
+
+def test_set_sender_replaces_the_file_atomically(tmp_path: Path) -> None:
+    """set-sender writes a new file and renames it over the old one, mode 0600,
+    leaving no temp file behind."""
+    path = tmp_path / "config.yaml"
+    _write(path)
+    path.chmod(0o644)
+    old_inode = path.stat().st_ino
+    assert main(["set-sender", "--path", str(path), "--jid", "519@s.whatsapp.net"]) == 0
+    assert path.stat().st_ino != old_inode
+    assert stat.S_IMODE(path.stat().st_mode) == 0o600
+    assert sorted(p.name for p in tmp_path.iterdir()) == ["config.yaml"]
+
+
+def test_set_sender_keeps_the_old_file_when_the_rename_fails(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """A failed write leaves the old file intact and removes the temp file."""
+    path = tmp_path / "config.yaml"
+    _write(path)
+    before = path.read_text()
+
+    def failing_replace(src: str, dst: object) -> None:
+        raise OSError("disk full")
+
+    monkeypatch.setattr(install_config.os, "replace", failing_replace)
+    with pytest.raises(OSError, match="disk full"):
+        main(["set-sender", "--path", str(path), "--jid", "519@s.whatsapp.net"])
+    assert path.read_text() == before
+    assert sorted(p.name for p in tmp_path.iterdir()) == ["config.yaml"]
 
 
 def test_diff_reports_missing_and_obsolete(tmp_path, capsys):

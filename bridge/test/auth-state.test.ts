@@ -1,12 +1,12 @@
 import assert from 'node:assert/strict';
 import { spawn } from 'node:child_process';
-import { mkdtemp, readdir, readFile, rm, writeFile } from 'node:fs/promises';
+import { chmod, mkdir, mkdtemp, readdir, readFile, rm, stat, writeFile } from 'node:fs/promises';
 import os from 'node:os';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { afterEach, beforeEach, describe, it } from 'node:test';
 import { BufferJSON } from '@whiskeysockets/baileys';
-import { useAtomicMultiFileAuthState, writeFileAtomic } from '../src/auth-state.js';
+import { ensurePrivateDir, useAtomicMultiFileAuthState, writeFileAtomic } from '../src/auth-state.js';
 
 const here = path.dirname(fileURLToPath(import.meta.url));
 
@@ -112,6 +112,38 @@ describe('useAtomicMultiFileAuthState', () => {
     const sessions = await state.keys.get('session', ['s']);
     assert.deepEqual(sessions.s, Buffer.from('19'));
     assert.deepEqual(await tmpFiles(), []);
+  });
+});
+
+async function modeOf(folder: string): Promise<number> {
+  return (await stat(folder)).mode & 0o777;
+}
+
+describe('auth folder mode', () => {
+  it('creates a missing auth folder with mode 0700', async () => {
+    const folder = path.join(dir, 'share', 'auth');
+    await useAtomicMultiFileAuthState(folder);
+    assert.equal(await modeOf(folder), 0o700);
+  });
+
+  it('sets an existing auth folder to mode 0700', async () => {
+    const folder = path.join(dir, 'auth');
+    await mkdir(folder);
+    await chmod(folder, 0o755);
+    await useAtomicMultiFileAuthState(folder);
+    assert.equal(await modeOf(folder), 0o700);
+  });
+
+  it('ensurePrivateDir sets mode 0700 and leaves the parent mode alone', async () => {
+    const parent = path.join(dir, 'parent');
+    await mkdir(parent);
+    await chmod(parent, 0o755);
+    const folder = path.join(parent, 'auth');
+    await mkdir(folder);
+    await chmod(folder, 0o777);
+    await ensurePrivateDir(folder);
+    assert.equal(await modeOf(folder), 0o700);
+    assert.equal(await modeOf(parent), 0o755);
   });
 });
 
