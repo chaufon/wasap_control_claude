@@ -18,10 +18,10 @@
 
 ## State and data locations
 
-- `~/.local/share/whatsapp-bridge/auth/`: WhatsApp pairing, written atomically. `~/.local/share/claude-orchestrator/`: `state.json` (toggles, active project, session IDs, last answers), `live/` (WhatsApp prompt markers), `logs/`, `piper-voices/`, and `node/` (private Node, only without system Node >= 20).
+- `~/.local/share/whatsapp-bridge/auth/`: WhatsApp pairing, mode 0700, written atomically. `~/.local/share/claude-orchestrator/`: `state.json` (toggles, active project, session IDs, last answers), `live/` (WhatsApp prompt markers), `logs/`, `piper-voices/`, and `node/` (private Node, only without system Node >= 20).
 - `<project>/whatsapp-inbox/`, `<project>/whatsapp-outbox/`: files from and to WhatsApp.
 
 ## Services
 
 - `claude-orchestrator.service` and `whatsapp-bridge.service`: user units rendered by `install.sh` from `deploy/systemd/*.service.in`. The bridge starts after the orchestrator. Linger is on unless `--login-only`.
-- `RestartPreventExitStatus=78`: the orchestrator exits 78 when `claude`, `tmux` or `ffmpeg` is missing, on `bypassPermissions` as root, or when the socket is taken. systemd does not restart it. After 10 failed WhatsApp reconnects the bridge exits 0 and stays stopped.
+- `RestartPreventExitStatus=78`: the orchestrator exits 78 on a configuration error (missing, unreadable or invalid `config.yaml`), when `claude`, `tmux` or `ffmpeg` is missing, on `bypassPermissions` as root, or when the socket path is taken or not writable. The bridge exits 78 on a configuration error and when WhatsApp logs the device out. systemd does not restart either. After 10 failed WhatsApp reconnects the bridge exits 0 and stays stopped.

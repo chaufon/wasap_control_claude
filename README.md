@@ -123,9 +123,12 @@ journalctl --user -u whatsapp-bridge.service -f
 
 The orchestrator also writes `~/.local/share/claude-orchestrator/logs/orchestrator.log`.
 
-If the orchestrator exits with code 78 (missing `claude`, `tmux` or `ffmpeg`,
-`bypassPermissions` as root, or a second orchestrator on the same socket),
-systemd does not restart it. Fix the cause in the log, then restart it.
+If the orchestrator exits with code 78 (a configuration error such as a
+missing or invalid `config.yaml`, missing `claude`, `tmux` or `ffmpeg`,
+`bypassPermissions` as root, or a socket path that is taken or not writable),
+systemd does not restart it. The bridge also exits 78 on a configuration error
+and when WhatsApp logs the device out. Fix the cause in the log, then restart
+the service.
 
 After 10 failed reconnects to WhatsApp the bridge exits, and systemd does not
 restart it. Start it again with `systemctl --user start whatsapp-bridge.service`
@@ -135,7 +138,9 @@ To pair again (for example after WhatsApp logged the device out):
 
 1. Stop the bridge: `systemctl --user stop whatsapp-bridge.service`. The
    service and `--pair` must never use the auth folder at the same time.
-2. Delete `~/.local/share/whatsapp-bridge/auth`.
+2. Move the auth folder aside:
+   `mv ~/.local/share/whatsapp-bridge/auth ~/.local/share/whatsapp-bridge/auth.old`.
+   Delete `auth.old` once the new pairing works.
 3. In `bridge/`, run `node dist/index.js --pair` with the Node binary from the
    `ExecStart=` line of `whatsapp-bridge.service`. Scan the QR code. It prints
    `PAIRED <jid>` and does not change the config.
@@ -224,9 +229,14 @@ Tests:
 ```bash
 cd orchestrator && uv run pytest -q                       # without a GPU
 cd orchestrator && uv run --extra cuda pytest -q          # with the cuda extra
-uv run --project orchestrator pytest deploy/tests -q      # installer, from the repo root
+uv run --project orchestrator pytest deploy/tests -q      # installer, from the repo root (add --extra cuda with a GPU)
 cd bridge && npm test && npm run build                    # bridge
 deploy/tests/containers.sh                                # Ubuntu, Fedora, Arch and Node 20 containers; needs Docker
 ```
+
+On a machine where `install.sh` installed the `cuda` extra, always pass
+`--extra cuda` to `uv run` and `uv sync`. A plain `uv run pytest` syncs the
+venv without the extra and removes the NVIDIA libraries from the venv the
+service uses, which breaks GPU Whisper until the next `uv sync --extra cuda`.
 
 After changing code, run `./install.sh` again or restart both services.

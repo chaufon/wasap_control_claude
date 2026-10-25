@@ -60,10 +60,9 @@ def markdown_to_whatsapp(text: str) -> str:
     working = _TABLE_ROW_RE.sub(_flatten_table_row, working)
     working = _LINK_RE.sub(lambda m: f"{m.group(1)} ({m.group(2)})", working)
     working = _STRIKE_RE.sub(lambda m: f"~{m.group(1)}~", working)
-    # Emphasis must run before headers: headers wrap their line in *bold*,
-    # and that wrapper must not be exposed to any further *later* pass that
-    # also matches single asterisks (it no longer is, since this is a single
-    # combined pass rather than chained bold-then-italic substitutions).
+    # Emphasis runs before headers: headers wrap their line in *bold*, and
+    # that wrapper must not reach a later pass that matches single asterisks.
+    # Bold and italic are handled in this one combined pass.
     working = _EMPHASIS_RE.sub(_emphasis_sub, working)
     working = _HEADER_RE.sub(lambda m: f"*{m.group(2).strip()}*", working)
     working = _INLINE_CODE_RE.sub(lambda m: f"```{m.group(1)}```", working)

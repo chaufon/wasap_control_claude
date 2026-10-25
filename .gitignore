@@ -21,9 +21,6 @@ deploy/config.yaml
 .env
 .env.*
 
-# Redis local dump.
-dump.rdb
-
 *.log
 
 # Editor / OS
@@ -31,8 +28,8 @@ dump.rdb
 .idea/
 .DS_Store
 
-# Local Claude Code settings (permission allowlist etc.) — dev-machine
-# specific, was never tracked but wasn't gitignored either.
+# Local Claude Code settings (permission allowlist and similar); they are
+# specific to each developer machine.
 .claude/
 
 # Scratch folder for sharing debugging screenshots mid-conversation, not

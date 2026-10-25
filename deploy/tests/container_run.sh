@@ -19,8 +19,9 @@ run_step() {
     "$@" || fail
 }
 
-# sudo and git are the brief's base packages. tar is for the harness's own copy
-# of the repo (not the installer) and is added only where the image lacks it.
+# sudo and git are the base packages. On Fedora tar is also listed: the harness
+# uses it to copy the repo (the installer does not need it), and dnf skips it
+# when the image already has it.
 install_base() {
     # shellcheck source=/dev/null
     . /etc/os-release
