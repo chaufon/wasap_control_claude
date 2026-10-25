@@ -260,20 +260,28 @@ GPU=0
 if nvidia-smi >/dev/null 2>&1; then
     GPU=1
 fi
-SYNC_ARGS="sync --project $REPO/orchestrator"
 WHISPER_DEVICE=cpu
+SYNC_EXTRA=""
 if [ "$GPU" = 1 ]; then
-    SYNC_ARGS="$SYNC_ARGS --extra cuda"
     WHISPER_DEVICE=cuda
+    SYNC_EXTRA=" --extra cuda"
 fi
 
+# Run uv sync for the orchestrator, with the cuda extra on a GPU machine.
+uv_sync() {
+    if [ "$GPU" = 1 ]; then
+        as_user "$UV" sync --project "$REPO/orchestrator" --extra cuda
+    else
+        as_user "$UV" sync --project "$REPO/orchestrator"
+    fi
+}
+
 if [ "$CHECK" = 1 ]; then
-    say "Would run: uv $SYNC_ARGS"
+    say "Would run: uv sync --project $REPO/orchestrator$SYNC_EXTRA"
     say "Would run: npm ci && npm run build (in $REPO/bridge, with $NODE)"
 else
-    say "Running: uv $SYNC_ARGS"
-    # shellcheck disable=SC2086
-    as_user "$UV" $SYNC_ARGS || die 78 "uv sync failed"
+    say "Running: uv sync --project $REPO/orchestrator$SYNC_EXTRA"
+    uv_sync || die 78 "uv sync failed"
     say "Running: npm ci && npm run build (in $REPO/bridge)"
     as_user env PATH="$(dirname "$NODE"):$PATH" sh -c 'cd "$1" && npm ci && npm run build' sh "$REPO/bridge" \
         || die 78 "Building the bridge failed"

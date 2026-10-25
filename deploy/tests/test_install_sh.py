@@ -63,6 +63,7 @@ if [ "$1" = sync ]; then
         [ "$prev" = --project ] && proj="$a"
         prev="$a"
     done
+    printf '%s\n' "$proj" > "$FAKE_STATE/uv-project"
     mkdir -p "$proj/.venv/bin"
     cp "$FAKE_STATE/venv-python" "$proj/.venv/bin/python"
     chmod 755 "$proj/.venv/bin/python"
@@ -103,9 +104,9 @@ exec "$@"
 
 
 class Env:
-    def __init__(self, tmp_path):
+    def __init__(self, tmp_path, repo_name="repo"):
         self.root = tmp_path
-        self.repo = tmp_path / "repo"
+        self.repo = tmp_path / repo_name
         self.home = tmp_path / "home"
         self.tmpdir = tmp_path / "tmp"
         self.state = tmp_path / "state"
@@ -405,6 +406,18 @@ def test_fresh_install_asks_project_root_and_pairs(env):
     bridge = (env.unit_dir / "whatsapp-bridge.service").read_text()
     assert 'ExecStart="%s" dist/index.js' % (env.bin / "node") in bridge
     assert "loginctl enable-linger" in " ".join(env.calls("loginctl"))
+
+
+def test_repo_path_with_a_space_reaches_uv_as_one_argument(tmp_path):
+    """uv sync gets `--project` and the full repo path, spaces included, as one argument."""
+    env = Env(tmp_path, repo_name="my repo")
+    env.extra_env["FAKE_GPU_STATUS"] = "0"
+    result = env.run(stdin="\n")
+    assert result.returncode == 0, result.stderr
+    project = (env.state / "uv-project").read_text().rstrip("\n")
+    assert project == str(env.repo / "orchestrator")
+    assert any(c.endswith("--extra cuda") for c in env.calls("uv") if c.startswith("uv sync"))
+    assert (env.repo / "orchestrator" / ".venv" / "bin" / "python").exists()
 
 
 def test_fresh_install_default_project_root_on_empty_answer(env):
