@@ -279,6 +279,23 @@ def test_a_second_orchestrator_exits_78_and_keeps_the_live_socket(
     _with_bus(tmp_path, scenario)
 
 
+@pytest.mark.skipif(os.geteuid() == 0, reason="root ignores directory permissions")
+def test_a_socket_path_without_write_permission_exits_78(
+    tmp_path: Path, caplog: "LogCaptureFixture"
+) -> None:
+    """A socket directory the user cannot write to exits 78 with a clear message."""
+    locked = tmp_path / "locked"
+    locked.mkdir(mode=0o500)
+    path = locked / "bus.sock"
+    try:
+        with pytest.raises(SystemExit) as exited:
+            asyncio.run(start_bus(path))
+    finally:
+        locked.chmod(0o700)
+    assert exited.value.code == 78
+    assert f"no permission to create the socket at {path}" in caplog.text
+
+
 def test_a_regular_file_at_the_socket_path_is_not_deleted(tmp_path: Path) -> None:
     """A regular file at the socket path is reported, never deleted."""
     path = tmp_path / "bus.sock"

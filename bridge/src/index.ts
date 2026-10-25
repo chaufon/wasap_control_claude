@@ -1,5 +1,5 @@
 import { runPairing, startBridge } from './baileys.js';
-import { loadConfig } from './config.js';
+import { ConfigError, exitCodeFor, loadConfig } from './config.js';
 import { SocketBus } from './socket.js';
 
 async function main(): Promise<void> {
@@ -12,8 +12,15 @@ async function main(): Promise<void> {
   await startBridge(config, bus);
 }
 
+// A configuration error exits 78, so systemd does not restart the bridge
+// (RestartPreventExitStatus=78); any other startup error exits 1.
 main().catch((err: unknown) => {
-  // eslint-disable-next-line no-console
-  console.error('whatsapp-bridge failed to start:', err);
-  process.exit(1);
+  if (err instanceof ConfigError) {
+    // eslint-disable-next-line no-console
+    console.error(`whatsapp-bridge configuration error: ${err.message}`);
+  } else {
+    // eslint-disable-next-line no-console
+    console.error('whatsapp-bridge failed to start:', err);
+  }
+  process.exit(exitCodeFor(err));
 });

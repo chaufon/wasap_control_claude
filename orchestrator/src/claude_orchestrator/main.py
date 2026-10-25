@@ -11,6 +11,8 @@ import shutil
 import sys
 from pathlib import Path
 
+import yaml
+
 from .config import Config, load_config
 from .dispatcher import Dispatcher
 from .live_session import LiveSessions
@@ -43,8 +45,23 @@ def _setup_logging() -> None:
     root.addHandler(stream_handler)
 
 
+# Errors load_config raises for a missing, unreadable or invalid file.
+CONFIG_ERRORS = (OSError, ValueError, KeyError, TypeError, AttributeError, yaml.YAMLError)
+
+
+def load_config_or_exit(path: Path | None = None) -> Config:
+    """Load the config, or log one line and exit 78 when it is missing,
+    unreadable or invalid."""
+    try:
+        return load_config(path)
+    except CONFIG_ERRORS as exc:
+        logger.error("configuration error: %s", exc)
+        raise SystemExit(EXIT_CONFIG) from exc
+
+
 async def start_bus(path: Path) -> SocketBus:
-    """Start the socket bus, or exit 78 when the socket path is taken."""
+    """Start the socket bus, or exit 78 when the socket path is taken or
+    not usable."""
     bus = SocketBus(path)
     try:
         await bus.start()
@@ -54,12 +71,15 @@ async def start_bus(path: Path) -> SocketBus:
     except FileExistsError as exc:
         logger.error("cannot create the socket: %s", exc)
         raise SystemExit(EXIT_CONFIG) from exc
+    except PermissionError as exc:
+        logger.error("no permission to create the socket at %s: %s", path, exc)
+        raise SystemExit(EXIT_CONFIG) from exc
     return bus
 
 
 def _binary_found(binary: str) -> bool:
     if os.path.isabs(binary):
-        return os.access(binary, os.X_OK)
+        return os.path.isfile(binary) and os.access(binary, os.X_OK)
     return shutil.which(binary) is not None
 
 
@@ -80,7 +100,7 @@ def check_runtime(config: Config) -> list[str]:
 
 async def _main() -> None:
     _setup_logging()
-    config = load_config()
+    config = load_config_or_exit()
     problems = check_runtime(config)
     for problem in problems:
         logger.error("%s", problem)

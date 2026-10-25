@@ -3,7 +3,7 @@ import { mkdtempSync, rmSync, writeFileSync } from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
 import { describe, it } from 'node:test';
-import { loadConfig } from '../src/config.js';
+import { ConfigError, EXIT_CONFIG, exitCodeFor, loadConfig } from '../src/config.js';
 
 function load(yaml: string, options?: { requireSender: boolean }) {
   const dir = mkdtempSync(path.join(os.tmpdir(), 'cfg-'));
@@ -25,6 +25,38 @@ describe('loadConfig socketPath', () => {
   it('ignores a leftover redis section', () => {
     const c = load('whatsapp:\n  allowed_sender_jid: a@b\nredis:\n  host: h\n  port: 1\n');
     assert.match(c.socketPath, /claude-orchestrator.*\.sock$/);
+  });
+
+  it('treats an empty socket_path as unset', () => {
+    const c = load('whatsapp:\n  allowed_sender_jid: a@b\ntransport:\n  socket_path: ""\n');
+    assert.match(c.socketPath, /claude-orchestrator.*\.sock$/);
+  });
+});
+
+describe('loadConfig errors', () => {
+  it('throws ConfigError for a missing file', () => {
+    assert.throws(
+      () => loadConfig(path.join(os.tmpdir(), 'no-such-dir', 'config.yaml')),
+      (err: unknown) => err instanceof ConfigError && /config file not found/.test(err.message),
+    );
+  });
+
+  it('throws ConfigError for a missing allowed_sender_jid', () => {
+    assert.throws(() => load('bridge:\n  auth_dir: /tmp/a\n'), ConfigError);
+  });
+
+  it('throws ConfigError for invalid YAML', () => {
+    assert.throws(() => load('whatsapp: [unclosed\n'), ConfigError);
+  });
+
+  it('throws ConfigError for a value of the wrong type', () => {
+    assert.throws(() => load('whatsapp:\n  allowed_sender_jid: a@b\nbridge:\n  auth_dir: 5\n'), ConfigError);
+  });
+
+  it('maps a ConfigError to exit code 78 and other errors to 1', () => {
+    assert.equal(EXIT_CONFIG, 78);
+    assert.equal(exitCodeFor(new ConfigError('bad')), 78);
+    assert.equal(exitCodeFor(new Error('boom')), 1);
   });
 });
 
