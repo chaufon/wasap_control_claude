@@ -1,5 +1,6 @@
 import asyncio
 import logging
+import shutil
 from pathlib import Path
 from typing import TYPE_CHECKING
 
@@ -48,6 +49,18 @@ def test_projects_lists_containers_with_children(make_dispatcher: MakeDispatcher
         "5. chaufon\n"
         "6. main\n\n"
         "▶️ Active: main"
+    )
+
+
+def test_projects_without_any_project_explains_how_to_create_one(
+    make_dispatcher: MakeDispatcher, root: Path
+) -> None:
+    """With no project anywhere, /projects names the project folder and points to /create."""
+    for child in root.iterdir():
+        shutil.rmtree(child)
+    dispatcher, bus, _ = make_dispatcher(containers=(), projects=[])
+    assert _run(dispatcher, bus, "projects") == (
+        f"📁 *Projects*\nNo projects yet in {root}.\nSend /create <name> to make one.\n\n▶️ Active: none"
     )
 
 

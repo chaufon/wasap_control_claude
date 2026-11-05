@@ -126,14 +126,16 @@ def make_dispatcher(root: Path, monkeypatch: "MonkeyPatch") -> MakeDispatcher:
     """A Dispatcher over `root`, with in-memory state, bus and live sessions."""
 
     def make(
-        containers: tuple[str, ...] = ("c", "c/car"), state: PersistedState | None = None
+        containers: tuple[str, ...] = ("c", "c/car"),
+        state: PersistedState | None = None,
+        projects: list[ProjectConfig] | None = None,
     ) -> tuple[Dispatcher, FakeBus, FakeLive]:
         persisted = state or PersistedState()
         monkeypatch.setattr(dispatcher_module, "load_state", lambda: persisted)
         monkeypatch.setattr(dispatcher_module, "save_state", lambda state: None)
         config = Config(
             whatsapp=WhatsAppConfig(allowed_sender_jid="me"),
-            projects=[ProjectConfig(name="main", path=root / "main")],
+            projects=[ProjectConfig(name="main", path=root / "main")] if projects is None else projects,
             project_root=root,
             project_containers=containers,
             progress_updates=ProgressUpdatesConfig(interval_seconds=3600),

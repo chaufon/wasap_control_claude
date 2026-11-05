@@ -449,6 +449,8 @@ class Dispatcher:
             lines = render_listing(
                 self._all_known_projects(), self._scan().containers, self._format_project_line
             )
+            if not lines:
+                lines = [f"No projects yet in {self._config.project_root}.", "Send /create <name> to make one."]
             active = self._active_project or "none"
             await self._reply("📁 *Projects*\n" + "\n".join(lines) + f"\n\n▶️ Active: {active}", message)
             return
