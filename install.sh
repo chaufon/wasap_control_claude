@@ -117,9 +117,13 @@ ask() {
     printf '%s\n' "$answer"
 }
 
-# Run a command with the terminal as stdin when there is one.
+# Run a command with the terminal as stdin when there is one. A stdin that is
+# already the terminal is kept: redirecting it from /dev/tty freezes the
+# terminal relay of the `sudo -u` that as_user uses.
 run_interactive() {
-    if (exec </dev/tty) 2>/dev/null; then
+    if [ -t 0 ]; then
+        "$@"
+    elif (exec </dev/tty) 2>/dev/null; then
         "$@" </dev/tty
     else
         "$@"
