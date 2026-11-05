@@ -237,7 +237,7 @@ if [ -n "$UV" ]; then say "uv: $UV"; else say "uv: would install uv"; fi
 if [ -n "$CLAUDE" ]; then say "Claude Code: $CLAUDE"; else say "Claude Code: would install Claude Code"; fi
 
 _claude_as_user() {
-    as_user timeout 90 "$CLAUDE" "$@"
+    as_user timeout --foreground 90 "$CLAUDE" "$@"
 }
 
 if [ -n "$CLAUDE" ]; then

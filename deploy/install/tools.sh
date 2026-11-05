@@ -65,6 +65,6 @@ ensure_claude() {
 # request succeeds. The status only reads the local credentials, which stay on
 # disk after the server has stopped accepting them.
 claude_logged_in() {
-    "$1" auth status --json 2>/dev/null | grep -Eq '"loggedIn"[[:space:]]*:[[:space:]]*true' || return 1
-    "$1" -p "Reply with ok." >/dev/null 2>&1
+    "$1" auth status --json 2>/dev/null </dev/null | grep -Eq '"loggedIn"[[:space:]]*:[[:space:]]*true' || return 1
+    "$1" -p "Reply with ok." >/dev/null 2>&1 </dev/null
 }
