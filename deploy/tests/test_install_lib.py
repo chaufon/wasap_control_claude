@@ -184,6 +184,19 @@ def test_claude_logged_in(tmp_path, output, expected):
     assert result.returncode == expected
 
 
+def test_claude_logged_in_rejects_credentials_the_server_refuses(tmp_path):
+    script = """
+if [ "$1" = "-p" ]; then
+    echo "OAuth session expired" >&2
+    exit 1
+fi
+echo '{"loggedIn": true}'
+"""
+    bin_dir = fake_bin(tmp_path, "claude", script)
+    result = run(f"claude_logged_in {bin_dir}/claude")
+    assert result.returncode == 1
+
+
 @pytest.mark.parametrize("name", LIB_FILES)
 def test_libs_parse_under_bash_posix(name):
     result = subprocess.run(

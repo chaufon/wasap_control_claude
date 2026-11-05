@@ -22,7 +22,7 @@ CURRENT_USER = subprocess.run(["id", "-un"], capture_output=True, text=True).std
 UTILITIES = [
     "sh", "bash", "env", "cat", "mkdir", "rm", "cp", "mv", "grep", "sed",
     "awk", "mktemp", "dirname", "basename", "uname", "tee", "chmod", "cut",
-    "tail", "head", "id", "tr", "sort", "ls", "touch", "readlink", "sleep",
+    "tail", "head", "id", "tr", "sort", "ls", "touch", "readlink", "sleep", "timeout",
 ]
 
 FAKES = {
