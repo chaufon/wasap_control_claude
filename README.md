@@ -16,6 +16,8 @@ and a Python orchestrator that runs the Claude Code sessions. See
 - A Claude subscription. The sessions use your Claude Code login, never an
   API key.
 - A phone with WhatsApp.
+- `git`, to clone the repository.
+- A correct system clock (NTP). With a wrong date, `apt` and HTTPS downloads fail.
 
 The installer gets everything else: `ffmpeg`, `tmux` and `curl` from your
 distro (`apt`, `dnf`, `pacman` or `zypper`), Node 20 or newer, `uv`, Claude
